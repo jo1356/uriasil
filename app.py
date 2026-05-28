@@ -433,40 +433,46 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     )
     st.plotly_chart(fig, use_container_width=True, key="sale_gap_chart")
 
-    # 차트 아래: 기준/비교 거래 내역 결합 표 (최신순)
+    # 차트 아래: 기준/비교 거래 내역 좌우 분할
     base_table_df = sale_df[
         (sale_df["아파트"] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
     ].copy()
     compare_table_df = sale_df[
         (sale_df["아파트"] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
     ].copy()
-    base_table_df["구분"] = "기준"
-    compare_table_df["구분"] = "비교"
-    combined = pd.concat([base_table_df, compare_table_df], ignore_index=True)
 
-    display_cols = [
-        c
-        for c in [
-            "구분",
-            "계약일자",
-            "아파트",
-            "평형그룹",
-            "전용면적(㎡)",
-            "거래금액(만원)",
-            "층",
-        ]
-        if c in combined.columns
+    table_cols = [
+        "계약일자",
+        "아파트",
+        "평형그룹",
+        "전용면적(㎡)",
+        "거래금액(만원)",
+        "층",
     ]
-    display_df = combined[display_cols].copy()
-    if "거래금액(만원)" in display_df.columns:
-        display_df["거래금액"] = display_df["거래금액(만원)"].apply(_format_amount_korean)
-        display_df = display_df.drop(columns=["거래금액(만원)"])
+    table_cols = [c for c in table_cols if c in sale_df.columns]
 
-    st.dataframe(
-        display_df.sort_values("계약일자", ascending=False),
-        use_container_width=True,
-        hide_index=True,
-    )
+    def _build_gap_table(df: pd.DataFrame) -> pd.DataFrame:
+        out = df[table_cols].copy()
+        if "거래금액(만원)" in out.columns:
+            out["거래금액"] = out["거래금액(만원)"].apply(_format_amount_korean)
+            out = out.drop(columns=["거래금액(만원)"])
+        return out.sort_values("계약일자", ascending=False)
+
+    left_col, right_col = st.columns(2)
+    with left_col:
+        st.markdown("#### 기준 아파트 거래 내역")
+        st.dataframe(
+            _build_gap_table(base_table_df),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with right_col:
+        st.markdown("#### 비교 아파트 거래 내역")
+        st.dataframe(
+            _build_gap_table(compare_table_df),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def _render_sidebar(
