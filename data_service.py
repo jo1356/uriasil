@@ -84,8 +84,9 @@ def parse_targets(raw: object) -> list[TargetDict]:
             continue
         dong = str(item.get("dong", "")).strip()
         name = str(item.get("name", "")).strip()
+        label = str(item.get("label", "")).strip() or name
         if dong and name:
-            targets.append({"dong": dong, "name": name})
+            targets.append({"dong": dong, "name": name, "label": label})
     return targets
 
 
@@ -451,6 +452,7 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
     pieces: list[pd.DataFrame] = []
     for target in targets:
         dong, name = target["dong"], target["name"]
+        display_name = target.get("label") or name
         label = target_label(target)
         mask = (
             df["법정동"].astype(str).str.contains(dong, case=False, na=False)
@@ -461,7 +463,7 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
             continue
         chunk["타겟라벨"] = label
         chunk["타겟동"] = dong
-        chunk["타겟명"] = name
+        chunk["타겟명"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()
 

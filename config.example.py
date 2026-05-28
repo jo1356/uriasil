@@ -4,7 +4,7 @@ REGION_NAME = ["강남구", "서초구"]
 DATA_START_YMD = "201401"
 
 TARGET_APARTMENTS = [
-    {"dong": "여의도동", "name": "삼부"},
-    {"dong": "잠실동", "name": "주공5"},
+    {"dong": "잠실동", "name": "주공아파트 5단지", "label": "잠실주공5"},
+    {"dong": "여의도동", "name": "삼부", "label": "삼부"},
 ]
 TARGET_PYEONG = ["24평형", "34평형"]

@@ -32,12 +32,14 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v16_rent_tabs"
+_DATA_CACHE_VERSION = "v17_jamsil_sambu"
 
 NEAREST_TOLERANCE_DAYS = 180
 
 # UI 선택지 고정 우선순위
 _APT_PRIORITY_KEYWORDS = [
+    "잠실주공5",
+    "삼부",
     "원베일리",
     "퍼스티지",
     "그랑자이",

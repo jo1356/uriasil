@@ -15,9 +15,10 @@ DATA_START_YMD = "201401"
 # DEAL_YMD = ["202601", "202602"]
 
 # 타겟 단지: 법정동(dong) + 아파트명(name) AND 조건
+# name: API 아파트명 부분 일치 | label(선택): 차트 표시명
 TARGET_APARTMENTS = [
-    {"dong": "잠실동", "name": "주공5"},
-    {"dong": "여의도동", "name": "삼부"},
+    {"dong": "잠실동", "name": "주공아파트 5단지", "label": "잠실주공5"},
+    {"dong": "여의도동", "name": "삼부", "label": "삼부"},
     {"dong": "반포동", "name": "퍼스티지"},
     {"dong": "방배동", "name": "디에이치"},       # 디에이치방배
     {"dong": "서초동", "name": "리더스원"},
