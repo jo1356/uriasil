@@ -420,7 +420,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     fig.update_layout(
         template="plotly_white",
         title=f"{base_apt} ({base_pyeong}) vs {compare_apt} ({compare_pyeong}) 갭 추이",
-        height=800,
+        height=600,
         hovermode="x unified",
         margin=dict(l=48, r=24, t=72, b=88),
         yaxis=dict(title="갭 차액", tickformat=".1f", ticksuffix="억"),
@@ -735,7 +735,7 @@ def main() -> None:
                 selected_series,
                 is_rent=False,
                 chart_key="sale_price_chart",
-                chart_height=850,
+                chart_height=600,
             )
 
     with tab_gap:
@@ -757,7 +757,7 @@ def main() -> None:
                 selected_series,
                 is_rent=True,
                 chart_key="rent_price_chart",
-                chart_height=1100,
+                chart_height=600,
             )
 
 
