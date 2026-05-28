@@ -109,7 +109,7 @@ def build_price_chart(
     aligned_df: pd.DataFrame,
     selected_labels: Iterable[str],
     y_axis_title: str = "거래금액",
-    chart_height: int = 850,
+    chart_height: int = 600,
 ) -> go.Figure:
     """
     aligned_df: prepare_chart_comparison_data() 결과

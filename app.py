@@ -757,7 +757,7 @@ def main() -> None:
                 selected_series,
                 is_rent=True,
                 chart_key="rent_price_chart",
-                chart_height=600,
+                chart_height=700,
             )
 
 
