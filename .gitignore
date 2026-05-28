@@ -1,0 +1,11 @@
+# 프로그램 실행 결과물
+data.csv
+filtered_apartment_data.csv
+all_combined_data.csv
+apartment_comparison_chart.html
+chart_*.html
+
+__pycache__/
+*.pyc
+.venv/
+venv/
