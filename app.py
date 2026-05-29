@@ -15,6 +15,7 @@ from data_service import (
     _as_list,
     cache_status,
     default_chart_selection,
+    get_apartment_select_column,
     load_cached_data,
     parse_target_pyeong,
     parse_targets,
@@ -32,7 +33,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v19_jamsil_jugong5_76m2"
+_DATA_CACHE_VERSION = "v20_target_first_filter"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -53,6 +54,7 @@ _JUGONG5_PYEONG_DISPLAY = getattr(
 
 # UI 선택지 고정 우선순위
 _APT_PRIORITY_KEYWORDS = [
+    "잠실주공5단지",
     "잠실주공5",
     "삼부",
     "원베일리",
@@ -314,8 +316,9 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         st.info("매매 데이터가 없어 갭 분석을 표시할 수 없습니다.")
         return
 
+    apt_col = get_apartment_select_column(sale_df)
     apt_options = sort_apartment_options_for_ui(
-        sale_df["아파트"].dropna().astype(str).unique().tolist()
+        sale_df[apt_col].dropna().astype(str).unique().tolist()
     )
     if not apt_options:
         st.info("매매 아파트 목록이 비어 있습니다.")
@@ -332,7 +335,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         )
         base_pyeong_options = (
             sorted(
-                sale_df.loc[sale_df["아파트"] == base_apt, "평형그룹"]
+                sale_df.loc[sale_df[apt_col] == base_apt, "평형그룹"]
                 .dropna()
                 .astype(str)
                 .unique()
@@ -362,7 +365,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         )
         compare_pyeong_options = (
             sorted(
-                sale_df.loc[sale_df["아파트"] == compare_apt, "평형그룹"]
+                sale_df.loc[sale_df[apt_col] == compare_apt, "평형그룹"]
                 .dropna()
                 .astype(str)
                 .unique()
@@ -387,10 +390,10 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         return
 
     base_df = sale_df[
-        (sale_df["아파트"] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
+        (sale_df[apt_col] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
     compare_df = sale_df[
-        (sale_df["아파트"] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
+        (sale_df[apt_col] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
 
     if base_df.empty or compare_df.empty:
@@ -485,10 +488,10 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
 
     # 차트 아래: 기준/비교 거래 내역 좌우 분할
     base_table_df = sale_df[
-        (sale_df["아파트"] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
+        (sale_df[apt_col] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
     ].copy()
     compare_table_df = sale_df[
-        (sale_df["아파트"] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
+        (sale_df[apt_col] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
     ].copy()
 
     table_cols = [

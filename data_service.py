@@ -701,34 +701,46 @@ def prepare_dashboard_data(
     raw_df: pd.DataFrame,
     targets: list[TargetDict],
 ) -> pd.DataFrame:
-    """대시보드용: 타겟 필터 + 평형 통합 + 차트용 컬럼 선계산."""
+    """대시보드용: 타겟 필터 → 단지별 평형 분류 → 차트용 컬럼 선계산."""
     if raw_df.empty:
         return raw_df
     base = normalize_raw_dataframe(raw_df)
     drop_cols = [c for c in _DERIVED_DASHBOARD_COLUMNS if c in base.columns]
     if drop_cols:
         base = base.drop(columns=drop_cols)
-    base = enforce_strict_pyeong_on_dataframe(base)
+    # 타겟 단지를 먼저 고른 뒤, 삼부·잠실주공5 등 단지별 ㎡ 규칙을 적용
     filtered = filter_by_targets(base, targets)
-    filtered = add_pyeong_columns(filtered)  # 전용면적(㎡)에서 24·34평형 재확정
+    if filtered.empty:
+        return filtered
+    filtered = add_pyeong_columns(filtered)
     return enrich_chart_columns(filtered)
 
 
 def sort_chart_labels(labels: list[str], targets: list[TargetDict]) -> list[str]:
     """config 단지 순서 → 평형 순으로 범례/선택 목록 정렬."""
     pyeong_rank = {name: i for i, name in enumerate(all_pyeong_labels())}
-    target_names = [t["name"] for t in targets]
+    target_keys: list[str] = []
+    for t in targets:
+        target_keys.append(str(t.get("label") or t["name"]))
+        target_keys.append(str(t["name"]))
 
     def sort_key(label: str) -> tuple[int, int, str]:
         apt_part = label.rsplit(" (", 1)[0] if " (" in label else label
         pyeong_part = label.rsplit(" (", 1)[-1].rstrip(")") if " (" in label else ""
         apt_rank = next(
-            (i for i, name in enumerate(target_names) if name in apt_part),
+            (i for i, key in enumerate(target_keys) if key in apt_part),
             999,
         )
         return (apt_rank, pyeong_rank.get(pyeong_part, 999), label)
 
     return sorted(labels, key=sort_key)
+
+
+def get_apartment_select_column(df: pd.DataFrame) -> str:
+    """UI 선택용 아파트 컬럼 (표시명 우선)."""
+    if "타겟명" in df.columns and df["타겟명"].notna().any():
+        return "타겟명"
+    return "아파트"
 
 
 def default_chart_selection(

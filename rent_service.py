@@ -385,8 +385,10 @@ def prepare_rent_dashboard_data(
     drop_cols = [c for c in _DERIVED_DASHBOARD_COLUMNS if c in base.columns]
     if drop_cols:
         base = base.drop(columns=drop_cols)
-    base = enforce_strict_pyeong_on_rent_dataframe(base)
+    base = filter_new_market_rent_contracts(base)
     filtered = filter_by_targets(base, targets)
+    if filtered.empty:
+        return filtered
     filtered = add_pyeong_columns(filtered)
     if "환산보증금(만원)" in filtered.columns:
         filtered["거래금액(만원)"] = filtered["환산보증금(만원)"]
