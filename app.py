@@ -36,7 +36,8 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v29_raw_line_unified_tooltip"
+_DATA_CACHE_VERSION = "v30_raw_line_no_aggregation"
+_CHART_SORT_COLS = ("계약일자", "계약일자_표시")
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -168,11 +169,22 @@ def get_prepared_rent_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.Data
     return prepare_rent_dashboard_data(raw, targets)
 
 
+def _sort_chart_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """차트·툴팁 공통 — 계약일(년월일) → 표시일 순 정렬 (집계 없음)."""
+    if df.empty:
+        return df
+    sort_cols = [c for c in _CHART_SORT_COLS if c in df.columns]
+    if not sort_cols:
+        return df.reset_index(drop=True)
+    return df.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
+
+
 def prepare_chart_comparison_data(
     df: pd.DataFrame,
     selected_labels: list[str],
     tolerance_days: int = NEAREST_TOLERANCE_DAYS,
 ) -> pd.DataFrame:
+    """통합 툴팁용 nearest 매핑 — 실거래 행 기준, 집계·중복 제거 없음."""
     if not selected_labels:
         return pd.DataFrame()
 
@@ -183,12 +195,8 @@ def prepare_chart_comparison_data(
         return chart_df
 
     chart_df["계약일자_표시"] = pd.to_datetime(chart_df["계약일자_표시"])
-    master = (
-        chart_df["계약일자_표시"]
-        .drop_duplicates()
-        .sort_values()
-        .to_frame(name="기준일")
-    )
+    chart_df = _sort_chart_rows(chart_df)
+    master = chart_df[["계약일자_표시"]].rename(columns={"계약일자_표시": "기준일"})
     tolerance = pd.Timedelta(days=tolerance_days)
     parts: list[pd.DataFrame] = []
 
@@ -196,17 +204,15 @@ def prepare_chart_comparison_data(
         sub = chart_df.loc[chart_df["차트라벨"] == label].copy()
         if sub.empty:
             continue
-        sub = (
-            sub.sort_values("계약일자_표시")
-            .drop_duplicates(subset=["계약일자_표시"], keep="last")
-        )
         trades = sub.rename(columns={"계약일자_표시": "실제거래일_표시"})[
             ["실제거래일_표시", "거래금액(만원)", "계약일자"]
-        ].sort_values("실제거래일_표시")
+        ]
+        trade_sort = [c for c in ("계약일자", "실제거래일_표시") if c in trades.columns]
+        trades = trades.sort_values(trade_sort, kind="mergesort")
 
         merged = pd.merge_asof(
             master.sort_values("기준일"),
-            trades,
+            trades.sort_values("실제거래일_표시"),
             left_on="기준일",
             right_on="실제거래일_표시",
             direction="nearest",
@@ -248,7 +254,7 @@ def prepare_raw_chart_data(
     if out.empty:
         return out
     out["계약일자_표시"] = pd.to_datetime(out["계약일자_표시"])
-    return out.sort_values("계약일자_표시").reset_index(drop=True)
+    return _sort_chart_rows(out)
 
 
 @st.cache_data(show_spinner=False)

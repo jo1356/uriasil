@@ -18,8 +18,16 @@ MANWON_PER_EOK = 10_000
 HOVER_LINE_SEP = " / "
 LINE_X_COL = "계약일자_표시"
 TOOLTIP_X_COL = "기준일"
+LINE_SORT_COLS = ("계약일자", "계약일자_표시")
 LINE_WIDTH = 1.5
 MARKER_SIZE = 4
+
+
+def _sort_line_rows(df: pd.DataFrame) -> pd.DataFrame:
+    sort_cols = [c for c in LINE_SORT_COLS if c in df.columns]
+    if not sort_cols:
+        return df.sort_values(LINE_X_COL, kind="mergesort")
+    return df.sort_values(sort_cols, kind="mergesort")
 
 
 def _manwon_to_eok_str(manwon: float) -> str:
@@ -146,7 +154,7 @@ def build_price_chart(
     palette = px.colors.qualitative.Plotly
 
     for idx, label in enumerate(labels):
-        sub = plot_df.loc[plot_df["차트라벨"] == label].sort_values(LINE_X_COL)
+        sub = _sort_line_rows(plot_df.loc[plot_df["차트라벨"] == label])
         if sub.empty:
             continue
         color = palette[idx % len(palette)]
