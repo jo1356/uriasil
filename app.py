@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 
 import streamlit as st
 import pandas as pd
@@ -80,81 +81,7 @@ _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "주공아파트 5단지": "잠실주공5단지",
 }
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
-_SIDEBAR_UI_VERSION = "컴팩트 사이드바 v2 (황금비율)"
-
-# 사이드바: 가독성 유지 + 적당히 컴팩트 (음수 마진·강제 높이 축소 없음)
-_SIDEBAR_COMPACT_CSS = """
-/* === 사이드바 황금비율 컴팩트 === */
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] {
-    gap: 0.35rem !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-    margin: 0 !important;
-}
-[data-testid="stSidebar"] .sidebar-apt-title {
-    margin-top: 15px !important;
-    margin-bottom: 5px !important;
-    padding: 0 !important;
-    font-size: 0.93rem !important;
-    font-weight: bold !important;
-    line-height: 1.35 !important;
-    color: #1e293b !important;
-}
-[data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
-    margin-top: 6px !important;
-}
-[data-testid="stSidebar"] .sidebar-apt-title p {
-    margin: 0 !important;
-    padding: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr,
-[data-testid="stSidebar"] hr.sidebar-apt-sep {
-    margin: 10px 0 0 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    border-top: 1px solid #e0e0e0 !important;
-}
-[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
-    margin: 0 !important;
-    padding: 0 !important;
-}
-[data-testid="stSidebar"] div.row-widget.stCheckbox,
-[data-testid="stSidebar"] [data-testid="stCheckbox"],
-[data-testid="stSidebar"] .stCheckbox {
-    margin-top: 0 !important;
-    margin-bottom: 2px !important;
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
-}
-[data-testid="stSidebar"] [data-testid="stCheckbox"] label p,
-[data-testid="stSidebar"] .stCheckbox label p {
-    margin: 0 !important;
-    font-size: 0.88rem !important;
-    line-height: 1.4 !important;
-}
-[data-testid="stSidebar"] [data-testid="column"] {
-    gap: 0.25rem !important;
-}
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-    margin-top: 4px !important;
-    margin-bottom: 4px !important;
-}
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-    font-size: 0.78rem !important;
-}
-[data-testid="stSidebar"] .stButton button {
-    padding-top: 0.3rem !important;
-    padding-bottom: 0.3rem !important;
-    min-height: 2.1rem !important;
-    font-size: 0.84rem !important;
-}
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 {
-    margin-top: 0.5rem !important;
-    margin-bottom: 0.35rem !important;
-    font-size: 1rem !important;
-}
-"""
+_SIDEBAR_UI_VERSION = "인라인 HTML v3"
 
 _PAGE_CSS = """
 <style>
@@ -204,14 +131,27 @@ div[data-testid="stSidebar"] {
     background: #e0e7ff;
     border-bottom: 4px solid #1d4ed8;
 }
-""" + _SIDEBAR_COMPACT_CSS + """
 </style>
 """
 
 
-def _inject_sidebar_compact_css() -> None:
-    """사이드바 렌더 직전 CSS 재주입 (Cloud 배포 반영 확인용)."""
-    st.markdown(f"<style>{_SIDEBAR_COMPACT_CSS}</style>", unsafe_allow_html=True)
+def _render_sidebar_apt_title(apt_name: str, *, is_first: bool = False) -> None:
+    """사이드바 단지명 — 인라인 스타일만 사용 (글로벌 CSS 없음)."""
+    safe_name = html.escape(str(apt_name))
+    margin_top = "6px" if is_first else "15px"
+    st.sidebar.markdown(
+        f"<div style='margin-top: {margin_top}; margin-bottom: 5px; "
+        f"font-weight: bold; font-size: 1.1em; color: #1e293b;'>{safe_name}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_apt_separator() -> None:
+    """단지 그룹 구분선 — 인라인 hr."""
+    st.sidebar.markdown(
+        "<hr style='margin: 10px 0px; border: none; border-top: 1px solid #e6e6e6;'>",
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data(show_spinner="매매 데이터 불러오는 중...")
@@ -572,11 +512,7 @@ def _render_sidebar_series_selector(
 
     st.caption("단지별 평형")
     for apt_idx, apt in enumerate(apt_list):
-        first_cls = " sidebar-apt-first" if apt_idx == 0 else ""
-        st.markdown(
-            f'<p class="sidebar-apt-title{first_cls}"><strong>{apt}</strong></p>',
-            unsafe_allow_html=True,
-        )
+        _render_sidebar_apt_title(apt, is_first=(apt_idx == 0))
         labels = apt_map[apt]
         if len(labels) == 1:
             label = labels[0]
@@ -586,9 +522,9 @@ def _render_sidebar_series_selector(
             if cb_key not in st.session_state:
                 selected_now = set(st.session_state.get(selected_key, []))
                 st.session_state[cb_key] = label in selected_now
-            st.checkbox(display_pyeong, key=cb_key)
+            st.sidebar.checkbox(display_pyeong, key=cb_key)
         else:
-            py_cols = st.columns(2)
+            py_cols = st.sidebar.columns(2)
             for idx, label in enumerate(labels):
                 _, pyeong = _extract_label_parts(label)
                 display_pyeong = _format_pyeong_for_apt(apt, pyeong)
@@ -597,12 +533,9 @@ def _render_sidebar_series_selector(
                     selected_now = set(st.session_state.get(selected_key, []))
                     st.session_state[cb_key] = label in selected_now
                 with py_cols[idx % 2]:
-                    st.checkbox(display_pyeong, key=cb_key)
+                    st.sidebar.checkbox(display_pyeong, key=cb_key)
         if apt_idx < len(apt_list) - 1:
-            st.markdown(
-                '<div class="sidebar-apt-sep-wrap"><hr class="sidebar-apt-sep" /></div>',
-                unsafe_allow_html=True,
-            )
+            _render_sidebar_apt_separator()
 
     selected_set: set[str] = set()
     for label in all_series:
@@ -847,7 +780,6 @@ def _render_sidebar(
     default_labels: list[str],
 ) -> list[str]:
     with st.sidebar:
-        _inject_sidebar_compact_css()
         selected_series = _render_sidebar_series_selector(
             sale_df,
             rent_df,
