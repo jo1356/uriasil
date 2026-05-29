@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v28_raw_line_chart"
+_DATA_CACHE_VERSION = "v29_raw_line_unified_tooltip"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -263,11 +263,24 @@ def _prepare_raw_chart_df(
     return prepare_raw_chart_data(_df, list(selected_labels))
 
 
+@st.cache_data(show_spinner=False)
+def _prepare_comparison_chart_df(
+    _df: pd.DataFrame,
+    selected_labels: tuple[str, ...],
+    _cache_version: str = _DATA_CACHE_VERSION,
+) -> pd.DataFrame:
+    """통합 툴팁용 nearest 매핑 DataFrame 캐시."""
+    if not selected_labels:
+        return pd.DataFrame()
+    return prepare_chart_comparison_data(_df, list(selected_labels))
+
+
 def _clear_data_caches() -> None:
     get_prepared_sale_data.clear()
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
     _prepare_raw_chart_df.clear()
+    _prepare_comparison_chart_df.clear()
 
 
 def _clear_series_selection_session() -> None:
@@ -395,12 +408,14 @@ def build_chart_cached(
     """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
     labels = list(selected_labels)
     raw_chart = _prepare_raw_chart_df(df, tuple(selected_labels))
+    tooltip_df = _prepare_comparison_chart_df(df, tuple(selected_labels))
     return build_price_chart(
         raw_chart,
         labels,
         y_axis_title=y_axis_title,
         chart_height=chart_height,
         label_formatter=_format_chart_label_display,
+        tooltip_df=tooltip_df,
     )
 
 
@@ -980,12 +995,14 @@ def _render_market_tab(
     if is_rent:
         st.caption(
             "월세는 **보증금 + (월세×250)** 으로 환산 전세가(억)를 계산해 표시합니다. "
-            "개별 계약을 **날짜순으로 연결한 꺾은선**으로 표시합니다 (평균·집계 없음)."
+            "차트는 **개별 거래 꺾은선**이며, 마우스를 올리면 **±6개월 nearest** 기준으로 "
+            "선택 단지들의 거래를 **단일 말풍선**에 고액순·% 비교 표시합니다."
         )
     else:
         st.caption(
-            "모든 실거래를 **날짜순으로 정렬해 개별 점을 이은 꺾은선**으로 표시합니다. "
-            "월별 평균이 아닌 **실제 계약 건별** 데이터입니다. 점에 마우스를 올리면 거래일·금액이 표시됩니다."
+            "모든 실거래를 **날짜순 꺾은선**으로 표시합니다 (평균·집계 없음). "
+            "마우스를 올리면 세로선과 **단일 말풍선**에 각 단지의 **가장 가까운 거래(±6개월 이내)** 가 "
+            "`단지명 / 매매가 / 실제거래일 / 최고가 대비 %` 로 고액순 표시됩니다."
         )
     st.divider()
 

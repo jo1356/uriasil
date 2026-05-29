@@ -9,9 +9,12 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
-from app import NEAREST_TOLERANCE_DAYS, prepare_chart_comparison_data
-from app import prepare_raw_chart_data
-from chart_builder import build_price_chart
+from app import NEAREST_TOLERANCE_DAYS, prepare_chart_comparison_data, prepare_raw_chart_data
+from chart_builder import (
+    HOVER_LINE_SEP,
+    _build_hover_block_for_timeline,
+    build_price_chart,
+)
 from data_service import load_cached_data, parse_targets, prepare_dashboard_data
 import config
 
@@ -67,6 +70,34 @@ def test_tolerance_excludes_far_trades() -> None:
     assert "B (34평형)" not in set(jan["차트라벨"]), "B is >180d away from 2020-01-01"
 
 
+def test_hover_block_sort_and_pct() -> None:
+    day = pd.DataFrame(
+        [
+            {
+                "차트라벨": "A (24평형)",
+                "거래금액(만원)": 320_000,
+                "계약일자": "20220409",
+            },
+            {
+                "차트라벨": "B (34평형)",
+                "거래금액(만원)": 400_000,
+                "계약일자": "20220409",
+            },
+            {
+                "차트라벨": "C (24평형)",
+                "거래금액(만원)": 360_000,
+                "계약일자": "20220409",
+            },
+        ]
+    )
+    block = _build_hover_block_for_timeline(day)
+    lines = block.split("<br>")
+    assert len(lines) == 3
+    assert "B (34평형)" in lines[0] and "100%" in lines[0]
+    assert "C (24평형)" in lines[1] and "90%" in lines[1]
+    assert "A (24평형)" in lines[2] and "80%" in lines[2]
+
+
 def test_chart_with_real_cache() -> None:
     raw = load_cached_data()
     if raw.empty:
@@ -75,16 +106,29 @@ def test_chart_with_real_cache() -> None:
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     prep = prepare_dashboard_data(raw, targets)
     labels = prep["차트라벨"].dropna().unique().tolist()[:4]
-    raw_chart = prepare_raw_chart_data(prep, labels)
-    assert not raw_chart.empty
-    assert len(raw_chart) >= len(labels), "each series should have at least one point"
-    fig = build_price_chart(raw_chart, labels)
-    assert fig.layout.hovermode == "closest"
-    lines = [t for t in fig.data if "lines" in (t.mode or "")]
-    assert len(lines) >= 1
-    assert fig.layout.legend.title.text == "단지 (평형)"
-    assert len(fig.data) == len(lines), "one line trace per series, no extra trend traces"
-    print("chart OK: raw points =", len(raw_chart), "line traces =", len(lines))
+    line_df = prepare_raw_chart_data(prep, labels)
+    tooltip_df = prepare_chart_comparison_data(prep, labels)
+    assert not line_df.empty
+    assert not tooltip_df.empty
+    assert len(line_df) >= len(labels)
+    fig = build_price_chart(line_df, labels, tooltip_df=tooltip_df)
+    assert fig.layout.hovermode == "x unified"
+    line_traces = [t for t in fig.data if t.hoverinfo == "skip"]
+    anchor = [t for t in fig.data if t.hoverinfo != "skip"]
+    assert len(line_traces) >= 1
+    assert len(anchor) == 1
+    sample = anchor[0].customdata[0][0]
+    assert HOVER_LINE_SEP in sample and "%" in sample
+    multi = tooltip_df.groupby("기준일")["차트라벨"].nunique()
+    assert multi.max() >= 2, "expected multi-series tooltips on master dates"
+    print(
+        "chart OK: raw points =",
+        len(line_df),
+        "line traces =",
+        len(line_traces),
+        "max series per date =",
+        int(multi.max()),
+    )
 
 
 if __name__ == "__main__":
@@ -92,4 +136,6 @@ if __name__ == "__main__":
     print("nearest fill OK")
     test_tolerance_excludes_far_trades()
     print("tolerance OK")
+    test_hover_block_sort_and_pct()
+    print("hover block OK")
     test_chart_with_real_cache()
