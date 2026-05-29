@@ -981,9 +981,6 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
         )
 
 
-_DATA_SOURCE_LABELS = {"sale": "매매", "rent": "전월세"}
-
-
 def _render_market_tab(
     df: pd.DataFrame,
     selected_series: list[str],
@@ -1017,9 +1014,6 @@ def _render_market_tab(
     if view.empty:
         st.warning("선택한 단지(평형)에 거래 데이터가 없습니다.")
         return
-
-    current_data_source_type = _DATA_SOURCE_LABELS.get(data_source, data_source)
-    st.write(f"현재 차트에 사용된 데이터 종류: {current_data_source_type}")
 
     y_title = "환산 전세가" if is_rent else "거래금액"
     fig = build_chart_cached(
