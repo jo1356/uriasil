@@ -1,5 +1,5 @@
 """
-실거래가 차트 — 개별 거래 산점도 + 이동평균 추세선.
+실거래가 차트 — 개별 거래를 시간순으로 연결한 꺾은선 그래프.
 입력: prepare_raw_chart_data() 가 만든 실거래 DataFrame
 """
 
@@ -15,9 +15,8 @@ import plotly.graph_objects as go
 
 MANWON_PER_EOK = 10_000
 X_COL = "계약일자_표시"
-TREND_ROLLING = "90D"
-SCATTER_MARKER_SIZE = 5
-SCATTER_OPACITY = 0.45
+LINE_WIDTH = 1.5
+MARKER_SIZE = 4
 
 
 def _manwon_to_eok_str(manwon: float) -> str:
@@ -70,21 +69,6 @@ def _yaxis_ticks_eok(y_series: pd.Series) -> tuple[list[float], list[str], float
     return tickvals, ticktext, tick_start - pad, tick_end + pad
 
 
-def _rolling_trend_series(sub: pd.DataFrame) -> pd.DataFrame:
-    """시계열 이동평균 추세선 (90일)."""
-    indexed = (
-        sub[[X_COL, "거래금액(만원)"]]
-        .dropna()
-        .drop_duplicates(subset=[X_COL], keep="last")
-        .set_index(X_COL)
-        .sort_index()
-    )
-    if indexed.empty:
-        return pd.DataFrame(columns=[X_COL, "거래금액(만원)"])
-    rolled = indexed["거래금액(만원)"].rolling(TREND_ROLLING, min_periods=1).mean()
-    return rolled.reset_index()
-
-
 def build_price_chart(
     chart_df: pd.DataFrame,
     selected_labels: Iterable[str],
@@ -94,7 +78,7 @@ def build_price_chart(
 ) -> go.Figure:
     """
     chart_df: 실거래 원본 (차트라벨, 계약일자_표시, 거래금액(만원), 계약일자)
-    개별 거래 = 산점도, 90일 이동평균 = 추세선.
+    시리즈별로 날짜순 정렬 후 개별 거래를 연결한 꺾은선 1개.
     """
     labels = list(selected_labels)
     fmt = label_formatter or (lambda s: s)
@@ -129,14 +113,13 @@ def build_price_chart(
             go.Scatter(
                 x=sub[X_COL],
                 y=sub["거래금액(만원)"],
-                mode="markers",
+                mode="lines+markers",
                 name=display_name,
-                legendgroup=label,
+                line=dict(width=LINE_WIDTH, color=color),
                 marker=dict(
-                    size=SCATTER_MARKER_SIZE,
+                    size=MARKER_SIZE,
                     color=color,
-                    opacity=SCATTER_OPACITY,
-                    line=dict(width=0.4, color="white"),
+                    line=dict(width=0.5, color="white"),
                 ),
                 customdata=list(zip(hover_dates, hover_prices)),
                 hovertemplate=(
@@ -146,21 +129,6 @@ def build_price_chart(
                 ),
             )
         )
-
-        trend = _rolling_trend_series(sub)
-        if not trend.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=trend[X_COL],
-                    y=trend["거래금액(만원)"],
-                    mode="lines",
-                    name=f"{display_name} 추세",
-                    legendgroup=label,
-                    showlegend=False,
-                    line=dict(width=2.5, color=color),
-                    hoverinfo="skip",
-                )
-            )
 
     tickvals, ticktext, y_lo, y_hi = _yaxis_ticks_eok(plot_df["거래금액(만원)"])
 

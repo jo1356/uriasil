@@ -80,10 +80,11 @@ def test_chart_with_real_cache() -> None:
     assert len(raw_chart) >= len(labels), "each series should have at least one point"
     fig = build_price_chart(raw_chart, labels)
     assert fig.layout.hovermode == "closest"
-    scatter = [t for t in fig.data if t.mode == "markers"]
-    assert len(scatter) >= 1
+    lines = [t for t in fig.data if "lines" in (t.mode or "")]
+    assert len(lines) >= 1
     assert fig.layout.legend.title.text == "단지 (평형)"
-    print("chart OK: raw points =", len(raw_chart), "traces =", len(fig.data))
+    assert len(fig.data) == len(lines), "one line trace per series, no extra trend traces"
+    print("chart OK: raw points =", len(raw_chart), "line traces =", len(lines))
 
 
 if __name__ == "__main__":

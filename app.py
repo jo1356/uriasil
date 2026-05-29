@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v27_scatter_trend_chart"
+_DATA_CACHE_VERSION = "v28_raw_line_chart"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -980,12 +980,12 @@ def _render_market_tab(
     if is_rent:
         st.caption(
             "월세는 **보증금 + (월세×250)** 으로 환산 전세가(억)를 계산해 표시합니다. "
-            "개별 계약은 **산점도**, **90일 이동평균선**은 추세(방향성)를 나타냅니다."
+            "개별 계약을 **날짜순으로 연결한 꺾은선**으로 표시합니다 (평균·집계 없음)."
         )
     else:
         st.caption(
-            "모든 실거래는 **개별 점(산점도)** 으로 표시되며, **90일 이동평균 추세선**으로 "
-            "전체 가격 흐름을 함께 볼 수 있습니다. 점에 마우스를 올리면 거래일·금액이 표시됩니다."
+            "모든 실거래를 **날짜순으로 정렬해 개별 점을 이은 꺾은선**으로 표시합니다. "
+            "월별 평균이 아닌 **실제 계약 건별** 데이터입니다. 점에 마우스를 올리면 거래일·금액이 표시됩니다."
         )
     st.divider()
 
