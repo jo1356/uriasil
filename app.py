@@ -35,7 +35,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v23_sidebar_filter"
+_DATA_CACHE_VERSION = "v24_sinbanpo2_filter"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -52,6 +52,13 @@ _JUGONG5_PYEONG_DISPLAY = getattr(
     config,
     "JAMSIL_JUGONG5_PYEONG_DISPLAY",
     {"34평형": "34평"},
+)
+_SINBANPO2_LABEL = getattr(config, "SINBANPO2_LABEL", "신반포2차")
+_SINBANPO2_APT_NAME = getattr(config, "SINBANPO2_APT_NAME", "신반포2")
+_SINBANPO2_PYEONG_DISPLAY = getattr(
+    config,
+    "SINBANPO2_PYEONG_DISPLAY",
+    {"24평형": "22평", "34평형": "35평"},
 )
 
 # UI 선택지 고정 우선순위
@@ -266,23 +273,35 @@ def _is_jamsil_jugong5_apt(apt_name: str | None) -> bool:
     return _JUGONG5_LABEL in text or _JUGONG5_APT_NAME in text
 
 
+def _is_sinbanpo2_apt(apt_name: str | None) -> bool:
+    if not apt_name:
+        return False
+    text = str(apt_name)
+    return _SINBANPO2_LABEL in text or text.strip() == _SINBANPO2_APT_NAME
+
+
 def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
     """단지별 UI 평형 표기. value는 24평형/34평형 유지."""
     if apt_name and _is_jamsil_jugong5_apt(apt_name):
         return _JUGONG5_PYEONG_DISPLAY.get(pyeong, pyeong)
     if apt_name and _SAMBU_APT in str(apt_name):
         return _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
+    if apt_name and _is_sinbanpo2_apt(apt_name):
+        return _SINBANPO2_PYEONG_DISPLAY.get(pyeong, pyeong)
     return pyeong
 
 
 def _format_chart_label_display(label: str) -> str:
-    """사이드바 multiselect용 — 단지별 평형 표기 커스텀."""
+    """사이드바 체크박스 — 단지별 평형 표기 커스텀."""
     apt, pyeong = _extract_label_parts(label)
     if _is_jamsil_jugong5_apt(apt):
         display_p = _JUGONG5_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
     if _SAMBU_APT in apt:
         display_p = _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
+        return f"{apt} ({display_p})"
+    if _is_sinbanpo2_apt(apt):
+        display_p = _SINBANPO2_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
     return label
 

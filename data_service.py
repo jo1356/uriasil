@@ -85,8 +85,12 @@ def parse_targets(raw: object) -> list[TargetDict]:
         dong = str(item.get("dong", "")).strip()
         name = str(item.get("name", "")).strip()
         label = str(item.get("label", "")).strip() or name
+        exact_name = bool(item.get("exact_name"))
         if dong and name:
-            targets.append({"dong": dong, "name": name, "label": label})
+            entry: TargetDict = {"dong": dong, "name": name, "label": label}
+            if exact_name:
+                entry["exact_name"] = True
+            targets.append(entry)
     return targets
 
 
@@ -171,6 +175,33 @@ def assign_jamsil_jugong5_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def is_sinbanpo2_apartment(dong: str, apt: str) -> bool:
+    """잠원동 신반포2(차) — 국토부 API 명칭 '신반포2'."""
+    sb_dong = str(getattr(config, "SINBANPO2_DONG", "잠원동"))
+    sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
+    return sb_dong in str(dong) and str(apt).strip() == sb_name
+
+
+def get_sinbanpo2_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "SINBANPO2_AREA_RULES",
+        [("24평형", 68.0, 69.0), ("34평형", 107.0, 108.0)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
+    """신반포2차 전용: 68㎡대→24평형, 107㎡대→34평형, 그 외 제외."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_sinbanpo2_area_rules():
+        if lo <= m2 < hi:
+            return label
+    return None
+
+
 def assign_pyeong_group_from_m2(
     area_m2: float,
     *,
@@ -178,7 +209,7 @@ def assign_pyeong_group_from_m2(
     apt: str = "",
 ) -> str | None:
     """
-    전용면적(㎡)으로 24/34평형 반환. 삼부·잠실주공5는 전용 예외 규칙 적용.
+    전용면적(㎡)으로 24/34평형 반환. 삼부·잠실주공5·신반포2차는 전용 예외 규칙 적용.
     - 일반 24평형: 57.0 ≤ ㎡ < 63.0
     - 일반 34평형: 82.0 ≤ ㎡ < 87.0
     """
@@ -186,6 +217,8 @@ def assign_pyeong_group_from_m2(
         return assign_sambu_pyeong_group(area_m2)
     if is_jamsil_jugong5_apartment(dong, apt):
         return assign_jamsil_jugong5_pyeong_group(area_m2)
+    if is_sinbanpo2_apartment(dong, apt):
+        return assign_sinbanpo2_pyeong_group(area_m2)
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
@@ -203,13 +236,15 @@ def assign_pyeong_group_for_cache(
     apt: str = "",
     targets: list[TargetDict] | None = None,
 ) -> str | None:
-    """캐시 저장용 평형그룹. 삼부·잠실주공5는 전용 ㎡ 규칙 적용."""
+    """캐시 저장용 평형그룹. 삼부·잠실주공5·신반포2차는 전용 ㎡ 규칙 적용."""
     if area_m2 is None or pd.isna(area_m2):
         return None
     if is_sambu_apartment(dong, apt):
         return assign_sambu_pyeong_group(area_m2)
     if is_jamsil_jugong5_apartment(dong, apt):
         return assign_jamsil_jugong5_pyeong_group(area_m2)
+    if is_sinbanpo2_apartment(dong, apt):
+        return assign_sinbanpo2_pyeong_group(area_m2)
     group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
     if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
         return group
@@ -234,6 +269,11 @@ def is_allowed_area_m2(
         return False
     if is_jamsil_jugong5_apartment(dong, apt):
         for label, lo, hi in get_jamsil_jugong5_area_rules():
+            if label == group:
+                return lo <= m2 < hi
+        return False
+    if is_sinbanpo2_apartment(dong, apt):
+        for label, lo, hi in get_sinbanpo2_area_rules():
             if label == group:
                 return lo <= m2 < hi
         return False
@@ -563,6 +603,19 @@ def clear_cache_file() -> None:
         CACHE_CSV.unlink()
 
 
+def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
+    """타겟 단지 행 매칭 (exact_name 시 API 명칭 완전 일치)."""
+    dong = target["dong"]
+    name = target["name"]
+    dong_mask = df["법정동"].astype(str).str.contains(dong, case=False, na=False)
+    apt_series = df["아파트"].astype(str).str.strip()
+    if target.get("exact_name") is True:
+        apt_mask = apt_series == name
+    else:
+        apt_mask = apt_series.str.contains(name, case=False, na=False)
+    return dong_mask & apt_mask
+
+
 def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFrame:
     if df.empty or not {"법정동", "아파트"}.issubset(df.columns):
         return df.iloc[0:0].copy()
@@ -572,10 +625,7 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
         dong, name = target["dong"], target["name"]
         display_name = target.get("label") or name
         label = target_label(target)
-        mask = (
-            df["법정동"].astype(str).str.contains(dong, case=False, na=False)
-            & df["아파트"].astype(str).str.contains(name, case=False, na=False)
-        )
+        mask = _target_row_mask(df, target)
         chunk = df.loc[mask].copy()
         if chunk.empty:
             continue
