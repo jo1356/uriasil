@@ -175,11 +175,37 @@ def assign_jamsil_jugong5_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def resolve_apt_for_pyeong_rules(
+    row: pd.Series | dict,
+    *,
+    apt_col: str = "아파트",
+    target_col: str = "타겟명",
+) -> str:
+    """평형 분류용 API 단지명 — 아파트 컬럼 우선, 없으면 타겟 표시명."""
+    if isinstance(row, dict):
+        api_name = str(row.get(apt_col, "") or "").strip()
+        display = str(row.get(target_col, "") or "").strip()
+    else:
+        api_name = str(row.get(apt_col, "") or "").strip()
+        display = str(row.get(target_col, "") or "").strip()
+    if api_name:
+        return api_name
+    sb_label = str(getattr(config, "SINBANPO2_LABEL", "신반포2차"))
+    sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
+    if display == sb_label:
+        return sb_name
+    return display
+
+
 def is_sinbanpo2_apartment(dong: str, apt: str) -> bool:
-    """잠원동 신반포2(차) — 국토부 API 명칭 '신반포2'."""
+    """잠원동 신반포2(차) — API 명칭 '신반포2' 또는 표시명 '신반포2차'."""
     sb_dong = str(getattr(config, "SINBANPO2_DONG", "잠원동"))
     sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
-    return sb_dong in str(dong) and str(apt).strip() == sb_name
+    sb_label = str(getattr(config, "SINBANPO2_LABEL", "신반포2차"))
+    apt_s = str(apt).strip()
+    if sb_dong not in str(dong):
+        return False
+    return apt_s in (sb_name, sb_label)
 
 
 def get_sinbanpo2_area_rules() -> list[tuple[str, float, float]]:
@@ -354,7 +380,7 @@ def add_pyeong_columns(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: assign_pyeong_group_from_m2(
             r["전용면적(㎡)"],
             dong=r.get("법정동", ""),
-            apt=r.get("아파트", r.get("타겟명", "")),
+            apt=resolve_apt_for_pyeong_rules(r),
         ),
         axis=1,
     )
@@ -392,7 +418,7 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                     r["전용면적(㎡)"],
                     r["평형그룹"],
                     dong=r.get("법정동", ""),
-                    apt=r.get("아파트", r.get("타겟명", "")),
+                    apt=resolve_apt_for_pyeong_rules(r),
                 ),
                 axis=1,
             )
@@ -609,10 +635,15 @@ def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
     name = target["name"]
     dong_mask = df["법정동"].astype(str).str.contains(dong, case=False, na=False)
     apt_series = df["아파트"].astype(str).str.strip()
+    label = str(target.get("label") or "").strip()
     if target.get("exact_name") is True:
         apt_mask = apt_series == name
+        if label and label != name:
+            apt_mask = apt_mask | (apt_series == label)
     else:
         apt_mask = apt_series.str.contains(name, case=False, na=False)
+        if label and label != name:
+            apt_mask = apt_mask | apt_series.str.contains(label, case=False, na=False)
     return dong_mask & apt_mask
 
 

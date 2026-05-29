@@ -35,7 +35,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v25_chart_display_labels"
+_DATA_CACHE_VERSION = "v26_sinbanpo2_apt_match"
 
 NEAREST_TOLERANCE_DAYS = 180
 
