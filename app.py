@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import math
 
 import streamlit as st
 import pandas as pd
@@ -36,7 +37,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v31_plotly_seq_x_all_points"
+_DATA_CACHE_VERSION = "v32_force_markers_y_outliers"
 _CHART_SORT_COLS = ("계약일자", "계약일자_표시")
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
@@ -250,7 +251,9 @@ def prepare_raw_chart_data(
     cols = ["차트라벨", "계약일자_표시", "거래금액(만원)", "계약일자"]
     use_cols = [c for c in cols if c in df.columns]
     out = df.loc[df["차트라벨"].isin(selected_labels), use_cols].copy()
+    out["거래금액(만원)"] = pd.to_numeric(out["거래금액(만원)"], errors="coerce")
     out = out.dropna(subset=["거래금액(만원)", "계약일자_표시"])
+    out = out.loc[out["거래금액(만원)"].map(lambda v: math.isfinite(float(v)))]
     if out.empty:
         return out
     out["계약일자_표시"] = pd.to_datetime(out["계약일자_표시"])

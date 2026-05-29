@@ -24,7 +24,8 @@ SEQ_X_COL = "_x_idx"
 TOOLTIP_X_COL = "기준일"
 LINE_SORT_COLS = ("계약일자", "계약일자_표시")
 LINE_WIDTH = 1.5
-MARKER_SIZE = 5
+MARKER_SIZE = 8
+MARKER_LINE_WIDTH = 1.5
 MAX_X_TICKS = 12
 
 
@@ -158,8 +159,12 @@ def _yaxis_ticks_eok(y_series: pd.Series) -> tuple[list[float], list[str], float
         tickvals = list(range(int(tick_start), int(tick_end) + 1, int(step)))
 
     ticktext = [_format_eok_label(v) for v in tickvals]
-    pad = step * 0.15
-    return tickvals, ticktext, tick_start - pad, tick_end + pad
+    # 저가 거래(4억대 등)가 Y축 하단에 잘리지 않도록 실제 min/max 기준 여백
+    y_pad_bottom = max(span * 0.08, step * 0.2, 3_000)
+    y_pad_top = max(span * 0.05, step * 0.15, 3_000)
+    y_lo = min(tick_start - y_pad_bottom, y_min - y_pad_bottom)
+    y_hi = max(tick_end + y_pad_top, y_max + y_pad_top)
+    return tickvals, ticktext, y_lo, y_hi
 
 
 def _tooltip_rows_for_trade(
@@ -202,7 +207,9 @@ def build_price_chart(
 
     plot_df = line_df.copy()
     plot_df[LINE_X_COL] = pd.to_datetime(plot_df[LINE_X_COL])
+    plot_df["거래금액(만원)"] = pd.to_numeric(plot_df["거래금액(만원)"], errors="coerce")
     plot_df = plot_df.dropna(subset=["거래금액(만원)", LINE_X_COL])
+    plot_df = plot_df.loc[plot_df["거래금액(만원)"].map(math.isfinite)]
     plot_df = _assign_sequential_x(plot_df)
 
     if tooltip_df is not None and not tooltip_df.empty:
@@ -220,19 +227,38 @@ def build_price_chart(
             continue
         color = palette[idx % len(palette)]
         display_name = fmt(label)
+        x_vals = sub[SEQ_X_COL].tolist()
+        y_vals = sub["거래금액(만원)"].astype(float).tolist()
+
+        # 선(trace)과 마커(trace) 분리 — Plotly가 동일 X에서 마커를 묻지 않도록
         fig.add_trace(
             go.Scatter(
-                x=sub[SEQ_X_COL],
-                y=sub["거래금액(만원)"],
-                mode="lines+markers",
+                x=x_vals,
+                y=y_vals,
+                mode="lines",
                 name=display_name,
+                legendgroup=display_name,
                 hoverinfo="skip",
                 connectgaps=True,
                 line=dict(width=LINE_WIDTH, color=color),
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode="markers",
+                name=display_name,
+                legendgroup=display_name,
+                showlegend=False,
+                hoverinfo="skip",
+                cliponaxis=False,
                 marker=dict(
                     size=MARKER_SIZE,
                     color=color,
-                    line=dict(width=0.5, color="white"),
+                    opacity=1.0,
+                    symbol="circle",
+                    line=dict(width=MARKER_LINE_WIDTH, color="#ffffff"),
                 ),
             )
         )
