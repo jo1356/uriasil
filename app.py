@@ -33,7 +33,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v20_target_first_filter"
+_DATA_CACHE_VERSION = "v21_unified_tab_series_ui"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -307,6 +307,99 @@ def sort_apartment_options_for_ui(apts: list[str]) -> list[str]:
     return sorted(apts, key=lambda name: _apt_rank(name))
 
 
+def _get_series_labels_from_df(df: pd.DataFrame) -> list[str]:
+    """준비된 DataFrame에서 차트 시리즈(차트라벨) 목록 생성."""
+    if df.empty or "차트라벨" not in df.columns:
+        return []
+    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+    labels = df["차트라벨"].dropna().astype(str).unique().tolist()
+    return sort_chart_labels_for_ui(sort_chart_labels(labels, targets))
+
+
+def _filter_series_by_apartments(
+    series_labels: list[str],
+    selected_apartments: list[str],
+) -> list[str]:
+    if not selected_apartments:
+        return series_labels
+    apt_set = set(selected_apartments)
+    return [
+        lb
+        for lb in series_labels
+        if _extract_label_parts(lb)[0] in apt_set
+    ]
+
+
+def _render_apartment_series_selector(
+    df: pd.DataFrame,
+    *,
+    key_prefix: str,
+    default_labels: list[str] | None = None,
+) -> list[str]:
+    """
+    매매·전월세 탭 공통 — 갭 분석과 동일한 타겟명·동적 평형 표기로 시리즈 선택.
+    반환값은 차트라벨(내부 value) 리스트.
+    """
+    all_series = _get_series_labels_from_df(df)
+    if not all_series:
+        st.warning("표시할 단지·평형 데이터가 없습니다.")
+        return []
+
+    apt_col = get_apartment_select_column(df)
+    apt_options = sort_apartment_options_for_ui(
+        df[apt_col].dropna().astype(str).unique().tolist()
+    )
+
+    st.markdown("##### 🏠 비교할 단지 · 평형")
+    apt_key = f"{key_prefix}_apt_filter"
+    series_key = f"{key_prefix}_series_select"
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("전체 단지", key=f"{key_prefix}_apt_all", use_container_width=True):
+            st.session_state[apt_key] = apt_options.copy()
+            st.rerun()
+    with col_b:
+        if st.button("단지 선택 해제", key=f"{key_prefix}_apt_clear", use_container_width=True):
+            st.session_state[apt_key] = []
+            st.rerun()
+
+    selected_apts = st.multiselect(
+        "아파트 (비우면 전체)",
+        options=apt_options,
+        placeholder="전체 단지",
+        key=apt_key,
+    )
+
+    filtered_series = _filter_series_by_apartments(all_series, selected_apts)
+    if not filtered_series:
+        st.info("선택한 아파트에 해당하는 평형 데이터가 없습니다.")
+        return []
+
+    defaults = [lb for lb in (default_labels or []) if lb in filtered_series]
+    if series_key not in st.session_state and defaults:
+        st.session_state[series_key] = defaults
+
+    col_c, col_d = st.columns(2)
+    with col_c:
+        if st.button("전체 평형", key=f"{key_prefix}_series_all", use_container_width=True):
+            st.session_state[series_key] = filtered_series.copy()
+            st.rerun()
+    with col_d:
+        if st.button("평형 선택 해제", key=f"{key_prefix}_series_clear", use_container_width=True):
+            st.session_state[series_key] = []
+            st.rerun()
+
+    selected_series = st.multiselect(
+        "단지 + 평형",
+        options=filtered_series,
+        format_func=_format_chart_label_display,
+        placeholder="단지(평형)을 선택하세요",
+        key=series_key,
+    )
+    return selected_series
+
+
 def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     st.caption(
         "기준/비교 단지를 각각 선택하면, **가장 가까운 과거 거래일** 기준으로 "
@@ -531,37 +624,8 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
 def _render_sidebar(
     sale_status: dict,
     rent_status: dict,
-    chart_options: list[str],
-    default_labels: list[str],
-) -> list[str]:
+) -> None:
     with st.sidebar:
-        st.subheader("🏠 비교할 단지 (평형)")
-
-        if "series_select" not in st.session_state:
-            st.session_state.series_select = [
-                lb for lb in default_labels if lb in chart_options
-            ]
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("전체 선택", use_container_width=True):
-                st.session_state.series_select = chart_options.copy()
-                st.rerun()
-        with col_b:
-            if st.button("선택 해제", use_container_width=True):
-                st.session_state.series_select = []
-                st.rerun()
-
-        selected_series = st.multiselect(
-            "단지 + 평형 선택",
-            options=chart_options,
-            format_func=_format_chart_label_display,
-            help="24·34평형만 표시 · 두 탭(매매/전월세) 공통 선택",
-            placeholder="단지(평형)을 선택하세요",
-            key="series_select",
-        )
-
-        st.divider()
         st.subheader("📥 데이터 수집")
 
         if st.button("🔄 데이터 업데이트", use_container_width=True, type="primary"):
@@ -629,8 +693,6 @@ def _render_sidebar(
         else:
             st.warning("전월세 캐시 없음")
 
-        return selected_series
-
 
 def _render_metrics(view: pd.DataFrame, series_count: int) -> None:
     m1, m2, m3, m4 = st.columns(4)
@@ -678,6 +740,17 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
             ]
 
         display_df = view[display_cols].copy()
+        if "평형그룹" in display_df.columns:
+            apt_name_col = (
+                "타겟명"
+                if "타겟명" in view.columns
+                else ("아파트" if "아파트" in view.columns else None)
+            )
+            if apt_name_col:
+                display_df["평형그룹"] = [
+                    _format_pyeong_for_apt(row.get(apt_name_col), str(row["평형그룹"]))
+                    for _, row in view.iterrows()
+                ]
         if is_rent:
             if "보증금(만원)" in display_df.columns:
                 display_df["보증금"] = display_df["보증금(만원)"].apply(_format_amount_korean)
@@ -705,15 +778,23 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
 
 def _render_market_tab(
     df: pd.DataFrame,
-    selected_series: list[str],
     *,
     is_rent: bool,
     chart_key: str,
     chart_height: int,
+    selector_key: str,
+    default_labels: list[str],
 ) -> None:
+    selected_series = _render_apartment_series_selector(
+        df,
+        key_prefix=selector_key,
+        default_labels=default_labels,
+    )
     if not selected_series:
-        st.warning("사이드바에서 **단지 (평형)** 을 1개 이상 선택해 주세요.")
+        st.warning("위에서 **아파트**와 **단지+평형**을 1개 이상 선택해 주세요.")
         return
+
+    st.divider()
 
     view = df[df["차트라벨"].isin(selected_series)]
     _render_metrics(view, len(selected_series))
@@ -756,22 +837,13 @@ def main() -> None:
     sale_df = get_prepared_sale_data()
     rent_df = get_prepared_rent_data()
 
-    sale_options = get_sorted_chart_options(market="sale")
-    rent_options = get_sorted_chart_options(market="rent")
-    chart_options = sorted(set(sale_options) | set(rent_options), key=lambda x: (
-        sale_options.index(x) if x in sale_options else 999,
-        x,
-    ))
-    if not chart_options:
-        chart_options = sale_options or rent_options
-    chart_options = sort_chart_labels_for_ui(chart_options)
-
     config_pyeong = parse_target_pyeong(getattr(config, "TARGET_PYEONG", None))
-    default_labels = default_chart_selection(chart_options, config_pyeong)
+    sale_series_options = _get_series_labels_from_df(sale_df)
+    rent_series_options = _get_series_labels_from_df(rent_df)
+    sale_default_labels = default_chart_selection(sale_series_options, config_pyeong)
+    rent_default_labels = default_chart_selection(rent_series_options, config_pyeong)
 
-    selected_series = _render_sidebar(
-        sale_status, rent_status, chart_options, default_labels
-    )
+    _render_sidebar(sale_status, rent_status)
 
     if (not sale_status["exists"] or sale_df.empty) and (
         not rent_status["exists"] or rent_df.empty
@@ -792,10 +864,11 @@ def main() -> None:
         else:
             _render_market_tab(
                 sale_df,
-                selected_series,
                 is_rent=False,
                 chart_key="sale_price_chart",
                 chart_height=600,
+                selector_key="sale",
+                default_labels=sale_default_labels,
             )
 
     with tab_gap:
@@ -814,10 +887,11 @@ def main() -> None:
         else:
             _render_market_tab(
                 rent_df,
-                selected_series,
                 is_rent=True,
                 chart_key="rent_price_chart",
                 chart_height=700,
+                selector_key="rent",
+                default_labels=rent_default_labels,
             )
 
 
