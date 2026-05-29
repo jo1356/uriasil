@@ -35,7 +35,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v22_checkbox_grid_ui"
+_DATA_CACHE_VERSION = "v23_sidebar_filter"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -356,19 +356,32 @@ def _apply_series_selection(
     _sync_checkbox_states(key_prefix, all_series, selected)
 
 
-def _render_apartment_series_selector(
-    df: pd.DataFrame,
+def _merge_series_labels(sale_df: pd.DataFrame, rent_df: pd.DataFrame) -> list[str]:
+    """매매·전월세 공통 사이드바 선택지 (차트라벨 합집합)."""
+    sale_labels = _get_series_labels_from_df(sale_df)
+    rent_labels = _get_series_labels_from_df(rent_df)
+    merged: list[str] = []
+    seen: set[str] = set()
+    for lb in sale_labels + rent_labels:
+        if lb not in seen:
+            seen.add(lb)
+            merged.append(lb)
+    return merged
+
+
+def _render_sidebar_series_selector(
+    sale_df: pd.DataFrame,
+    rent_df: pd.DataFrame,
     *,
-    key_prefix: str,
     default_labels: list[str] | None = None,
 ) -> list[str]:
     """
-    매매·전월세 탭 — 4개 핵심 버튼 + 아파트별 체크박스 그리드.
-    반환값은 차트라벨(내부 value) 리스트.
+    사이드바 — 4개 핵심 버튼(2x2) + 아파트별 체크박스.
+    반환값은 차트라벨(내부 value) 리스트 (매매·전월세 탭 공통).
     """
-    all_series = _get_series_labels_from_df(df)
+    key_prefix = "series"
+    all_series = _merge_series_labels(sale_df, rent_df)
     if not all_series:
-        st.warning("표시할 단지·평형 데이터가 없습니다.")
         return []
 
     selected_key = f"{key_prefix}_selected"
@@ -381,51 +394,56 @@ def _render_apartment_series_selector(
             initial = set(all_series)
         _apply_series_selection(key_prefix, all_series, initial)
 
-    st.markdown("##### 🏠 비교할 단지 · 평형")
+    st.subheader("🏠 비교할 단지 · 평형")
 
-    btn1, btn2, btn3, btn4 = st.columns(4)
-    with btn1:
+    row1c1, row1c2 = st.columns(2)
+    with row1c1:
         if st.button("전체 단지 선택", key=f"{key_prefix}_btn_all", use_container_width=True):
             _apply_series_selection(key_prefix, all_series, set(all_series))
             st.rerun()
-    with btn2:
-        if st.button("24평형 선택", key=f"{key_prefix}_btn_24", use_container_width=True):
-            picked = {
-                lb
-                for lb in all_series
-                if _extract_label_parts(lb)[1] == "24평형"
-            }
-            _apply_series_selection(key_prefix, all_series, picked)
-            st.rerun()
-    with btn3:
-        if st.button("34평형 선택", key=f"{key_prefix}_btn_34", use_container_width=True):
-            picked = {
-                lb
-                for lb in all_series
-                if _extract_label_parts(lb)[1] == "34평형"
-            }
-            _apply_series_selection(key_prefix, all_series, picked)
-            st.rerun()
-    with btn4:
+    with row1c2:
         if st.button("전체 선택 해제", key=f"{key_prefix}_btn_clear", use_container_width=True):
             _apply_series_selection(key_prefix, all_series, set())
             st.rerun()
 
-    grid_cols = 4
-    for row_start in range(0, len(apt_list), grid_cols):
-        row_apts = apt_list[row_start : row_start + grid_cols]
-        cols = st.columns(len(row_apts))
-        for col, apt in zip(cols, row_apts):
-            with col:
-                st.markdown(f"**{apt}**")
-                for label in apt_map[apt]:
-                    _, pyeong = _extract_label_parts(label)
-                    display_pyeong = _format_pyeong_for_apt(apt, pyeong)
-                    cb_key = _series_checkbox_key(key_prefix, label)
-                    if cb_key not in st.session_state:
-                        selected_now = set(st.session_state.get(selected_key, []))
-                        st.session_state[cb_key] = label in selected_now
+    row2c1, row2c2 = st.columns(2)
+    with row2c1:
+        if st.button("24평형 선택", key=f"{key_prefix}_btn_24", use_container_width=True):
+            picked = {lb for lb in all_series if _extract_label_parts(lb)[1] == "24평형"}
+            _apply_series_selection(key_prefix, all_series, picked)
+            st.rerun()
+    with row2c2:
+        if st.button("34평형 선택", key=f"{key_prefix}_btn_34", use_container_width=True):
+            picked = {lb for lb in all_series if _extract_label_parts(lb)[1] == "34평형"}
+            _apply_series_selection(key_prefix, all_series, picked)
+            st.rerun()
+
+    st.caption("단지별 평형")
+    for apt in apt_list:
+        st.markdown(f"**{apt}**")
+        labels = apt_map[apt]
+        if len(labels) == 1:
+            label = labels[0]
+            _, pyeong = _extract_label_parts(label)
+            display_pyeong = _format_pyeong_for_apt(apt, pyeong)
+            cb_key = _series_checkbox_key(key_prefix, label)
+            if cb_key not in st.session_state:
+                selected_now = set(st.session_state.get(selected_key, []))
+                st.session_state[cb_key] = label in selected_now
+            st.checkbox(display_pyeong, key=cb_key)
+        else:
+            py_cols = st.columns(2)
+            for idx, label in enumerate(labels):
+                _, pyeong = _extract_label_parts(label)
+                display_pyeong = _format_pyeong_for_apt(apt, pyeong)
+                cb_key = _series_checkbox_key(key_prefix, label)
+                if cb_key not in st.session_state:
+                    selected_now = set(st.session_state.get(selected_key, []))
+                    st.session_state[cb_key] = label in selected_now
+                with py_cols[idx]:
                     st.checkbox(display_pyeong, key=cb_key)
+        if apt != apt_list[-1]:
+            st.divider()
 
     selected_set: set[str] = set()
     for label in all_series:
@@ -434,8 +452,7 @@ def _render_apartment_series_selector(
     st.session_state[selected_key] = list(selected_set)
 
     if selected_set:
-        summary = ", ".join(_format_chart_label_display(lb) for lb in sorted(selected_set))
-        st.caption(f"선택됨 ({len(selected_set)}개): {summary}")
+        st.caption(f"✓ {len(selected_set)}개 선택")
 
     return list(selected_set)
 
@@ -664,8 +681,18 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
 def _render_sidebar(
     sale_status: dict,
     rent_status: dict,
-) -> None:
+    sale_df: pd.DataFrame,
+    rent_df: pd.DataFrame,
+    default_labels: list[str],
+) -> list[str]:
     with st.sidebar:
+        selected_series = _render_sidebar_series_selector(
+            sale_df,
+            rent_df,
+            default_labels=default_labels,
+        )
+
+        st.divider()
         st.subheader("📥 데이터 수집")
 
         if st.button("🔄 데이터 업데이트", use_container_width=True, type="primary"):
@@ -732,6 +759,8 @@ def _render_sidebar(
             )
         else:
             st.warning("전월세 캐시 없음")
+
+    return selected_series
 
 
 def _render_metrics(view: pd.DataFrame, series_count: int) -> None:
@@ -818,23 +847,15 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
 
 def _render_market_tab(
     df: pd.DataFrame,
+    selected_series: list[str],
     *,
     is_rent: bool,
     chart_key: str,
     chart_height: int,
-    selector_key: str,
-    default_labels: list[str],
 ) -> None:
-    selected_series = _render_apartment_series_selector(
-        df,
-        key_prefix=selector_key,
-        default_labels=default_labels,
-    )
     if not selected_series:
-        st.warning("위 체크박스에서 **단지·평형**을 1개 이상 선택해 주세요.")
+        st.warning("사이드바에서 **단지·평형**을 1개 이상 선택해 주세요.")
         return
-
-    st.divider()
 
     view = df[df["차트라벨"].isin(selected_series)]
     _render_metrics(view, len(selected_series))
@@ -878,12 +899,16 @@ def main() -> None:
     rent_df = get_prepared_rent_data()
 
     config_pyeong = parse_target_pyeong(getattr(config, "TARGET_PYEONG", None))
-    sale_series_options = _get_series_labels_from_df(sale_df)
-    rent_series_options = _get_series_labels_from_df(rent_df)
-    sale_default_labels = default_chart_selection(sale_series_options, config_pyeong)
-    rent_default_labels = default_chart_selection(rent_series_options, config_pyeong)
+    merged_series_options = _merge_series_labels(sale_df, rent_df)
+    default_labels = default_chart_selection(merged_series_options, config_pyeong)
 
-    _render_sidebar(sale_status, rent_status)
+    selected_series = _render_sidebar(
+        sale_status,
+        rent_status,
+        sale_df,
+        rent_df,
+        default_labels,
+    )
 
     if (not sale_status["exists"] or sale_df.empty) and (
         not rent_status["exists"] or rent_df.empty
@@ -904,11 +929,10 @@ def main() -> None:
         else:
             _render_market_tab(
                 sale_df,
+                selected_series,
                 is_rent=False,
                 chart_key="sale_price_chart",
                 chart_height=600,
-                selector_key="sale",
-                default_labels=sale_default_labels,
             )
 
     with tab_gap:
@@ -927,11 +951,10 @@ def main() -> None:
         else:
             _render_market_tab(
                 rent_df,
+                selected_series,
                 is_rent=True,
                 chart_key="rent_price_chart",
                 chart_height=700,
-                selector_key="rent",
-                default_labels=rent_default_labels,
             )
 
 
