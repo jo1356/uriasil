@@ -2,9 +2,6 @@
 실거래가 차트 — 개별 거래 꺾은선 + 통합 툴팁(세로선·단지 간 nearest 비교).
 line_df: prepare_raw_chart_data() — 모든 개별 거래 연결
 tooltip_df: prepare_chart_comparison_data() — 기준일별 통합 툴팁
-
-Plotly는 동일 datetime X에 여러 점이 있으면 선·마커가 겹쳐 보일 수 있어,
-전체 거래를 날짜순 정렬한 뒤 고유 순번(_x_idx)을 X축으로 사용한다.
 """
 
 from __future__ import annotations
@@ -20,55 +17,9 @@ import plotly.graph_objects as go
 MANWON_PER_EOK = 10_000
 HOVER_LINE_SEP = " / "
 LINE_X_COL = "계약일자_표시"
-SEQ_X_COL = "_x_idx"
 TOOLTIP_X_COL = "기준일"
-LINE_SORT_COLS = ("계약일자", "계약일자_표시")
 LINE_WIDTH = 1.5
-MARKER_SIZE = 8
-MARKER_LINE_WIDTH = 1.5
-MAX_X_TICKS = 12
-
-
-def _sort_line_rows(df: pd.DataFrame) -> pd.DataFrame:
-    sort_cols = [c for c in LINE_SORT_COLS if c in df.columns]
-    if not sort_cols:
-        return df.sort_values(LINE_X_COL, kind="mergesort")
-    return df.sort_values(sort_cols, kind="mergesort")
-
-
-def _assign_sequential_x(plot_df: pd.DataFrame) -> pd.DataFrame:
-    """날짜순 정렬 후 거래마다 고유 X 순번 부여 (집계·병합 없음)."""
-    out = _sort_line_rows(plot_df).reset_index(drop=True)
-    out[SEQ_X_COL] = range(len(out))
-    return out
-
-
-def _format_xaxis_date_label(row: pd.Series) -> str:
-    contract = row.get("계약일자")
-    if contract is not None and not pd.isna(contract):
-        return _format_contract_date_short(contract)
-    ts = pd.Timestamp(row[LINE_X_COL])
-    return f"{ts.year % 100:02d}.{ts.month:02d}.{ts.day:02d}"
-
-
-def _build_xaxis_date_ticks(plot_df: pd.DataFrame) -> tuple[list[int], list[str]]:
-    """X축 눈금 — 순번 위치에 실제 계약일 라벨."""
-    n = len(plot_df)
-    if n == 0:
-        return [], []
-
-    if n <= MAX_X_TICKS:
-        indices = list(range(n))
-    else:
-        step = max(1, (n - 1) // (MAX_X_TICKS - 1))
-        indices = list(range(0, n, step))
-        if indices[-1] != n - 1:
-            indices.append(n - 1)
-
-    ticktext = [
-        _format_xaxis_date_label(plot_df.iloc[i]) for i in indices
-    ]
-    return indices, ticktext
+MARKER_SIZE = 4
 
 
 def _manwon_to_eok_str(manwon: float) -> str:
@@ -159,23 +110,8 @@ def _yaxis_ticks_eok(y_series: pd.Series) -> tuple[list[float], list[str], float
         tickvals = list(range(int(tick_start), int(tick_end) + 1, int(step)))
 
     ticktext = [_format_eok_label(v) for v in tickvals]
-    # 저가 거래(4억대 등)가 Y축 하단에 잘리지 않도록 실제 min/max 기준 여백
-    y_pad_bottom = max(span * 0.08, step * 0.2, 3_000)
-    y_pad_top = max(span * 0.05, step * 0.15, 3_000)
-    y_lo = min(tick_start - y_pad_bottom, y_min - y_pad_bottom)
-    y_hi = max(tick_end + y_pad_top, y_max + y_pad_top)
-    return tickvals, ticktext, y_lo, y_hi
-
-
-def _tooltip_rows_for_trade(
-    tooltip_df: pd.DataFrame,
-    ref_date: pd.Timestamp,
-) -> pd.DataFrame:
-    if tooltip_df.empty or TOOLTIP_X_COL not in tooltip_df.columns:
-        return pd.DataFrame()
-    ref = pd.Timestamp(ref_date).normalize()
-    dates = pd.to_datetime(tooltip_df[TOOLTIP_X_COL]).dt.normalize()
-    return tooltip_df.loc[dates == ref]
+    pad = step * 0.15
+    return tickvals, ticktext, tick_start - pad, tick_end + pad
 
 
 def build_price_chart(
@@ -189,9 +125,6 @@ def build_price_chart(
     """
     line_df: 실거래 원본 — 날짜순 꺾은선 (집계 없음)
     tooltip_df: nearest 매핑 — 기준일별 통합 툴팁용
-
-    X축은 Plotly datetime 겹침을 피하기 위해 거래 순번(0..N-1)을 사용하고,
-    tick 라벨만 실제 계약일로 표시한다.
     """
     labels = list(selected_labels)
     fmt = label_formatter or (lambda s: s)
@@ -209,84 +142,50 @@ def build_price_chart(
     plot_df[LINE_X_COL] = pd.to_datetime(plot_df[LINE_X_COL])
     plot_df["거래금액(만원)"] = pd.to_numeric(plot_df["거래금액(만원)"], errors="coerce")
     plot_df = plot_df.dropna(subset=["거래금액(만원)", LINE_X_COL])
-    plot_df = plot_df.loc[plot_df["거래금액(만원)"].map(math.isfinite)]
-    plot_df = _assign_sequential_x(plot_df)
-
-    if tooltip_df is not None and not tooltip_df.empty:
-        hover_source = tooltip_df.copy()
-        hover_source[TOOLTIP_X_COL] = pd.to_datetime(hover_source[TOOLTIP_X_COL])
-    else:
-        hover_source = None
 
     fig = go.Figure()
     palette = px.colors.qualitative.Plotly
 
     for idx, label in enumerate(labels):
-        sub = plot_df.loc[plot_df["차트라벨"] == label].sort_values(SEQ_X_COL)
+        sub = plot_df.loc[plot_df["차트라벨"] == label].sort_values(LINE_X_COL)
         if sub.empty:
             continue
         color = palette[idx % len(palette)]
         display_name = fmt(label)
-        x_vals = sub[SEQ_X_COL].tolist()
-        y_vals = sub["거래금액(만원)"].astype(float).tolist()
-
-        # 선(trace)과 마커(trace) 분리 — Plotly가 동일 X에서 마커를 묻지 않도록
         fig.add_trace(
             go.Scatter(
-                x=x_vals,
-                y=y_vals,
-                mode="lines",
+                x=sub[LINE_X_COL],
+                y=sub["거래금액(만원)"],
+                mode="lines+markers",
                 name=display_name,
-                legendgroup=display_name,
                 hoverinfo="skip",
-                connectgaps=True,
                 line=dict(width=LINE_WIDTH, color=color),
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=x_vals,
-                y=y_vals,
-                mode="markers",
-                name=display_name,
-                legendgroup=display_name,
-                showlegend=False,
-                hoverinfo="skip",
-                cliponaxis=False,
                 marker=dict(
                     size=MARKER_SIZE,
                     color=color,
-                    opacity=1.0,
-                    symbol="circle",
-                    line=dict(width=MARKER_LINE_WIDTH, color="#ffffff"),
+                    line=dict(width=0.5, color="white"),
                 ),
             )
         )
 
-    anchor_x: list[int] = []
+    hover_source = tooltip_df if tooltip_df is not None and not tooltip_df.empty else plot_df
+    if TOOLTIP_X_COL in hover_source.columns:
+        hover_source = hover_source.copy()
+        hover_source[TOOLTIP_X_COL] = pd.to_datetime(hover_source[TOOLTIP_X_COL])
+    else:
+        hover_source = hover_source.copy()
+        hover_source[TOOLTIP_X_COL] = pd.to_datetime(hover_source[LINE_X_COL])
+
+    anchor_x: list[pd.Timestamp] = []
     anchor_y: list[float] = []
     anchor_blocks: list[str] = []
 
-    for _, row in plot_df.iterrows():
-        x_pos = int(row[SEQ_X_COL])
-        ref_date = pd.Timestamp(row[LINE_X_COL])
-        if hover_source is not None:
-            day_df = _tooltip_rows_for_trade(hover_source, ref_date)
-        else:
-            day_df = pd.DataFrame(
-                [
-                    {
-                        "차트라벨": row["차트라벨"],
-                        "거래금액(만원)": row["거래금액(만원)"],
-                        "계약일자": row.get("계약일자"),
-                    }
-                ]
-            )
+    for ref_date, day_df in hover_source.groupby(TOOLTIP_X_COL, sort=True):
         block = _build_hover_block_for_timeline(day_df, label_formatter=fmt)
         if not block:
             continue
-        anchor_x.append(x_pos)
-        anchor_y.append(float(row["거래금액(만원)"]))
+        anchor_x.append(pd.Timestamp(ref_date))
+        anchor_y.append(float(day_df["거래금액(만원)"].max()))
         anchor_blocks.append(block)
 
     if anchor_x:
@@ -310,9 +209,7 @@ def build_price_chart(
             )
         )
 
-    x_tickvals, x_ticktext = _build_xaxis_date_ticks(plot_df)
     tickvals, ticktext, y_lo, y_hi = _yaxis_ticks_eok(plot_df["거래금액(만원)"])
-    x_max = max(len(plot_df) - 1, 0)
 
     fig.update_layout(
         template="plotly_white",
@@ -347,12 +244,8 @@ def build_price_chart(
         paper_bgcolor="#ffffff",
     )
     fig.update_xaxes(
-        title=dict(text="계약일 (거래 순서)"),
-        type="linear",
-        tickmode="array",
-        tickvals=x_tickvals,
-        ticktext=x_ticktext,
-        range=[-0.5, x_max + 0.5] if x_max else None,
+        title=dict(text="계약일"),
+        tickformat="%Y-%m",
         showgrid=True,
         gridcolor="#eef2f7",
         showspikes=True,

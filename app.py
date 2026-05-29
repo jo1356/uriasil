@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import html
-import math
 
 import streamlit as st
 import pandas as pd
@@ -37,8 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v32_force_markers_y_outliers"
-_CHART_SORT_COLS = ("계약일자", "계약일자_표시")
+_DATA_CACHE_VERSION = "v33_restore_original_chart_rendering"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -170,22 +168,11 @@ def get_prepared_rent_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.Data
     return prepare_rent_dashboard_data(raw, targets)
 
 
-def _sort_chart_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """차트·툴팁 공통 — 계약일(년월일) → 표시일 순 정렬 (집계 없음)."""
-    if df.empty:
-        return df
-    sort_cols = [c for c in _CHART_SORT_COLS if c in df.columns]
-    if not sort_cols:
-        return df.reset_index(drop=True)
-    return df.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
-
-
 def prepare_chart_comparison_data(
     df: pd.DataFrame,
     selected_labels: list[str],
     tolerance_days: int = NEAREST_TOLERANCE_DAYS,
 ) -> pd.DataFrame:
-    """통합 툴팁용 nearest 매핑 — 실거래 행 기준, 집계·중복 제거 없음."""
     if not selected_labels:
         return pd.DataFrame()
 
@@ -196,8 +183,12 @@ def prepare_chart_comparison_data(
         return chart_df
 
     chart_df["계약일자_표시"] = pd.to_datetime(chart_df["계약일자_표시"])
-    chart_df = _sort_chart_rows(chart_df)
-    master = chart_df[["계약일자_표시"]].rename(columns={"계약일자_표시": "기준일"})
+    master = (
+        chart_df["계약일자_표시"]
+        .drop_duplicates()
+        .sort_values()
+        .to_frame(name="기준일")
+    )
     tolerance = pd.Timedelta(days=tolerance_days)
     parts: list[pd.DataFrame] = []
 
@@ -205,15 +196,17 @@ def prepare_chart_comparison_data(
         sub = chart_df.loc[chart_df["차트라벨"] == label].copy()
         if sub.empty:
             continue
+        sub = (
+            sub.sort_values("계약일자_표시")
+            .drop_duplicates(subset=["계약일자_표시"], keep="last")
+        )
         trades = sub.rename(columns={"계약일자_표시": "실제거래일_표시"})[
             ["실제거래일_표시", "거래금액(만원)", "계약일자"]
-        ]
-        trade_sort = [c for c in ("계약일자", "실제거래일_표시") if c in trades.columns]
-        trades = trades.sort_values(trade_sort, kind="mergesort")
+        ].sort_values("실제거래일_표시")
 
         merged = pd.merge_asof(
             master.sort_values("기준일"),
-            trades.sort_values("실제거래일_표시"),
+            trades,
             left_on="기준일",
             right_on="실제거래일_표시",
             direction="nearest",
@@ -253,11 +246,10 @@ def prepare_raw_chart_data(
     out = df.loc[df["차트라벨"].isin(selected_labels), use_cols].copy()
     out["거래금액(만원)"] = pd.to_numeric(out["거래금액(만원)"], errors="coerce")
     out = out.dropna(subset=["거래금액(만원)", "계약일자_표시"])
-    out = out.loc[out["거래금액(만원)"].map(lambda v: math.isfinite(float(v)))]
     if out.empty:
         return out
     out["계약일자_표시"] = pd.to_datetime(out["계약일자_표시"])
-    return _sort_chart_rows(out)
+    return out.sort_values("계약일자_표시").reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -1004,15 +996,13 @@ def _render_market_tab(
     if is_rent:
         st.caption(
             "월세는 **보증금 + (월세×250)** 으로 환산 전세가(억)를 계산해 표시합니다. "
-            "차트는 Plotly **lines+markers**로 거래 순서(1→N)마다 점을 찍으며, "
-            "동일 날짜·동일 월에도 **평균·병합 없이** 모든 건이 표시됩니다. "
-            "마우스를 올리면 **±6개월 nearest** 기준 **단일 말풍선** 비교가 나타납니다."
+            "차트는 **개별 거래 꺾은선**이며, 마우스를 올리면 **±6개월 nearest** 기준으로 "
+            "선택 단지들의 거래를 **단일 말풍선**에 고액순·% 비교 표시합니다."
         )
     else:
         st.caption(
-            "Plotly **lines+markers** — 계약일 순으로 1번부터 N번까지 **모든 실거래**를 "
-            "꺾은선으로 연결합니다 (라이브러리 자동 집계 없음). "
-            "마우스를 올리면 **단일 말풍선**에 각 단지 **가장 가까운 거래(±6개월)** 가 "
+            "모든 실거래를 **날짜순 꺾은선**으로 표시합니다 (평균·집계 없음). "
+            "마우스를 올리면 세로선과 **단일 말풍선**에 각 단지의 **가장 가까운 거래(±6개월 이내)** 가 "
             "고액순·% 비교로 표시됩니다."
         )
     st.divider()
@@ -1024,7 +1014,6 @@ def _render_market_tab(
     y_title = "환산 전세가" if is_rent else "거래금액"
     fig = build_chart_cached(df, tuple(selected_series), y_title, chart_height)
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
-    _render_trade_table(view, is_rent=is_rent)
 
 
 def main() -> None:
