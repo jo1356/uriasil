@@ -36,12 +36,9 @@ def _format_contract_date_short(contract_ymd: object) -> str:
     return f"{ts.year % 100:02d}.{ts.month:02d}.{ts.day:02d}"
 
 
-def _series_color_dot_html(color: str) -> str:
-    """차트 선 색상과 동일한 원형 마커 (툴팁 HTML)."""
-    return (
-        '<span style="display:inline-block;margin-right:5px;border-radius:50%;'
-        f'width:10px;height:10px;background-color:{color};"></span>'
-    )
+def _series_unicode_marker(color: str) -> str:
+    """Plotly 툴팁 호환 — 유니코드 ● + 글자색만 지정."""
+    return f'<span style="color:{color};">●</span>'
 
 
 def _format_hover_line(
@@ -53,7 +50,7 @@ def _format_hover_line(
     series_color: str | None = None,
 ) -> str:
     label_with_dot = (
-        f"{_series_color_dot_html(series_color)}{label}"
+        f"{_series_unicode_marker(series_color)} {label}"
         if series_color
         else label
     )
