@@ -36,9 +36,13 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v34_fix_tab_data_source"
+_DATA_CACHE_VERSION = "v35_outlier_flags"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
+
+_OUTLIER_MEDIAN_RATIO = 0.55
+_OUTLIER_ROW_BG = "#f0f0f0"
+_OUTLIER_ROW_COLOR = "#888888"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -158,14 +162,80 @@ def _render_sidebar_apt_separator() -> None:
 def get_prepared_sale_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.DataFrame:
     raw = load_cached_data()
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
-    return prepare_dashboard_data(raw, targets)
+    return add_outlier_flags(prepare_dashboard_data(raw, targets), is_rent=False)
 
 
 @st.cache_data(show_spinner="전월세 데이터 불러오는 중...")
 def get_prepared_rent_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.DataFrame:
     raw = load_cached_rent_data()
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
-    return prepare_rent_dashboard_data(raw, targets)
+    return add_outlier_flags(prepare_rent_dashboard_data(raw, targets), is_rent=True)
+
+
+def add_outlier_flags(df: pd.DataFrame, *, is_rent: bool) -> pd.DataFrame:
+    """
+    임대세대 등 특수 저가 거래 플래그 — 행 삭제 없이 is_outlier 컬럼만 추가.
+    전월세: [계약연도, 단지명, 평형] 그룹 환산전세가 중앙값의 55% 미만.
+    """
+    if df.empty:
+        out = df.copy()
+        out["is_outlier"] = False
+        return out
+
+    out = df.copy()
+    if not is_rent:
+        out["is_outlier"] = False
+        return out
+
+    if "환산보증금(만원)" in out.columns:
+        price = pd.to_numeric(out["환산보증금(만원)"], errors="coerce")
+    else:
+        price = pd.to_numeric(out.get("거래금액(만원)"), errors="coerce")
+
+    apt_col = get_apartment_select_column(out)
+    if "평형그룹" not in out.columns:
+        out["is_outlier"] = False
+        return out
+
+    if "계약년" in out.columns:
+        contract_year = out["계약년"].astype(str)
+    elif "계약일자" in out.columns:
+        contract_year = out["계약일자"].astype(str).str[:4]
+    elif "계약일자_표시" in out.columns:
+        contract_year = pd.to_datetime(out["계약일자_표시"], errors="coerce").dt.year.astype("Int64").astype(str)
+    else:
+        out["is_outlier"] = False
+        return out
+
+    group_keys = pd.DataFrame(
+        {
+            "_outlier_year": contract_year,
+            "_outlier_apt": out[apt_col].astype(str),
+            "_outlier_pyeong": out["평형그룹"].astype(str),
+            "_outlier_price": price,
+        },
+        index=out.index,
+    )
+    medians = group_keys.groupby(
+        ["_outlier_year", "_outlier_apt", "_outlier_pyeong"],
+        dropna=False,
+    )["_outlier_price"].transform("median")
+    out["is_outlier"] = price.notna() & medians.notna() & (price < medians * _OUTLIER_MEDIAN_RATIO)
+    return out
+
+
+def _chart_df_excluding_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """차트용 — is_outlier == False 만."""
+    if df.empty or "is_outlier" not in df.columns:
+        return df
+    return df.loc[~df["is_outlier"].fillna(False)]
+
+
+def _style_outlier_table_rows(row: pd.Series, outlier_flags: pd.Series) -> list[str]:
+    if bool(outlier_flags.get(row.name, False)):
+        css = f"background-color: {_OUTLIER_ROW_BG}; color: {_OUTLIER_ROW_COLOR};"
+        return [css] * len(row)
+    return [""] * len(row)
 
 
 def prepare_chart_comparison_data(
@@ -974,8 +1044,18 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
             display_df["거래금액"] = display_df["거래금액(만원)"].apply(_format_amount_korean)
             display_df = display_df.drop(columns=["거래금액(만원)"])
 
+        sorted_df = display_df.sort_values("계약일자", ascending=False)
+        outlier_flags = (
+            view.loc[sorted_df.index, "is_outlier"].fillna(False)
+            if "is_outlier" in view.columns
+            else pd.Series(False, index=sorted_df.index)
+        )
+        styled = sorted_df.style.apply(
+            lambda row: _style_outlier_table_rows(row, outlier_flags),
+            axis=1,
+        )
         st.dataframe(
-            display_df.sort_values("계약일자", ascending=False),
+            styled,
             use_container_width=True,
             hide_index=True,
         )
@@ -1016,8 +1096,9 @@ def _render_market_tab(
         return
 
     y_title = "환산 전세가" if is_rent else "거래금액"
+    chart_df = _chart_df_excluding_outliers(df)
     fig = build_chart_cached(
-        df,
+        chart_df,
         tuple(selected_series),
         y_title,
         chart_height,
