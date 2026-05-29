@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v33_restore_original_chart_rendering"
+_DATA_CACHE_VERSION = "v34_fix_tab_data_source"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -254,6 +254,7 @@ def prepare_raw_chart_data(
 
 @st.cache_data(show_spinner=False)
 def _prepare_raw_chart_df(
+    data_source: str,
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     _cache_version: str = _DATA_CACHE_VERSION,
@@ -266,6 +267,7 @@ def _prepare_raw_chart_df(
 
 @st.cache_data(show_spinner=False)
 def _prepare_comparison_chart_df(
+    data_source: str,
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     _cache_version: str = _DATA_CACHE_VERSION,
@@ -405,11 +407,12 @@ def build_chart_cached(
     selected_labels: tuple[str, ...],
     y_axis_title: str,
     chart_height: int,
+    data_source: str,
 ) -> go.Figure:
     """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
     labels = list(selected_labels)
-    raw_chart = _prepare_raw_chart_df(df, tuple(selected_labels))
-    tooltip_df = _prepare_comparison_chart_df(df, tuple(selected_labels))
+    raw_chart = _prepare_raw_chart_df(data_source, df, tuple(selected_labels))
+    tooltip_df = _prepare_comparison_chart_df(data_source, df, tuple(selected_labels))
     return build_price_chart(
         raw_chart,
         labels,
@@ -978,6 +981,9 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
         )
 
 
+_DATA_SOURCE_LABELS = {"sale": "매매", "rent": "전월세"}
+
+
 def _render_market_tab(
     df: pd.DataFrame,
     selected_series: list[str],
@@ -985,6 +991,7 @@ def _render_market_tab(
     is_rent: bool,
     chart_key: str,
     chart_height: int,
+    data_source: str,
 ) -> None:
     if not selected_series:
         st.warning("사이드바에서 **단지·평형**을 1개 이상 선택해 주세요.")
@@ -1011,8 +1018,17 @@ def _render_market_tab(
         st.warning("선택한 단지(평형)에 거래 데이터가 없습니다.")
         return
 
+    current_data_source_type = _DATA_SOURCE_LABELS.get(data_source, data_source)
+    st.write(f"현재 차트에 사용된 데이터 종류: {current_data_source_type}")
+
     y_title = "환산 전세가" if is_rent else "거래금액"
-    fig = build_chart_cached(df, tuple(selected_series), y_title, chart_height)
+    fig = build_chart_cached(
+        df,
+        tuple(selected_series),
+        y_title,
+        chart_height,
+        data_source=data_source,
+    )
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
     _render_trade_table(view, is_rent=is_rent)
 
@@ -1075,6 +1091,7 @@ def main() -> None:
                 is_rent=False,
                 chart_key="sale_price_chart",
                 chart_height=600,
+                data_source="sale",
             )
 
     with tab_gap:
@@ -1097,6 +1114,7 @@ def main() -> None:
                 is_rent=True,
                 chart_key="rent_price_chart",
                 chart_height=700,
+                data_source="rent",
             )
 
 
