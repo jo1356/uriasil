@@ -80,149 +80,78 @@ _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "주공아파트 5단지": "잠실주공5단지",
 }
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
-_SIDEBAR_UI_VERSION = "컴팩트 사이드바 v1"
+_SIDEBAR_UI_VERSION = "컴팩트 사이드바 v2 (황금비율)"
 
-# Streamlit 래퍼 div 여백까지 덮어쓰는 사이드바 전용 CSS
+# 사이드바: 가독성 유지 + 적당히 컴팩트 (음수 마진·강제 높이 축소 없음)
 _SIDEBAR_COMPACT_CSS = """
-/* === 사이드바 강제 컴팩트 (data-testid 래퍼 타겟) === */
-section[data-testid="stSidebar"] {
-    padding-top: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-    padding-top: 0.25rem !important;
-    padding-bottom: 0.25rem !important;
-}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-    padding-top: 0.25rem !important;
-    padding-bottom: 0.25rem !important;
-}
+/* === 사이드바 황금비율 컴팩트 === */
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] {
-    gap: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="block-container"] {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="element-container"],
-[data-testid="stSidebar"] [data-testid="stElementContainer"],
-[data-testid="stSidebar"] .element-container,
-[data-testid="stSidebar"] .stElementContainer {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdown"],
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
+    gap: 0.35rem !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
     margin: 0 !important;
-    padding: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr {
-    margin-top: 5px !important;
-    margin-bottom: 5px !important;
-    padding: 0 !important;
-    border: none !important;
-    border-top: 1px solid #e0e0e0 !important;
-}
-[data-testid="stSidebar"] hr.sidebar-apt-sep {
-    margin-top: 5px !important;
-    margin-bottom: 5px !important;
-}
-[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
-    margin: 0 !important;
-    padding: 0 !important;
-    line-height: 0 !important;
-}
-[data-testid="stSidebar"] div.row-widget.stCheckbox,
-[data-testid="stSidebar"] [data-testid="stCheckbox"],
-[data-testid="stSidebar"] .stCheckbox {
-    min-height: 0px !important;
-    margin-top: -10px !important;
-    margin-bottom: -10px !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stCheckbox"] > label,
-[data-testid="stSidebar"] .stCheckbox > label {
-    min-height: 0 !important;
-    margin: 0 !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="stCheckbox"] label p,
-[data-testid="stSidebar"] .stCheckbox label p {
-    margin: 0 !important;
-    padding: 0 !important;
-    font-size: 0.86rem !important;
-    line-height: 1.05 !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-apt-title) {
-    margin-top: 0 !important;
-    margin-bottom: -12px !important;
-    padding-bottom: 0 !important;
 }
 [data-testid="stSidebar"] .sidebar-apt-title {
-    margin-top: 12px !important;
-    margin-bottom: 0 !important;
+    margin-top: 15px !important;
+    margin-bottom: 5px !important;
     padding: 0 !important;
-    font-size: 0.92rem !important;
-    font-weight: 600 !important;
-    line-height: 1.1 !important;
+    font-size: 0.93rem !important;
+    font-weight: bold !important;
+    line-height: 1.35 !important;
     color: #1e293b !important;
 }
 [data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
-    margin-top: 2px !important;
+    margin-top: 6px !important;
 }
 [data-testid="stSidebar"] .sidebar-apt-title p {
     margin: 0 !important;
     padding: 0 !important;
 }
-[data-testid="stSidebar"] [data-testid="column"] {
-    gap: 0 !important;
-}
-[data-testid="stSidebar"] [data-testid="column"] > div {
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr,
+[data-testid="stSidebar"] hr.sidebar-apt-sep {
+    margin: 10px 0 0 0 !important;
     padding: 0 !important;
+    border: none !important;
+    border-top: 1px solid #e0e0e0 !important;
+}
+[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] div.row-widget.stCheckbox,
+[data-testid="stSidebar"] [data-testid="stCheckbox"],
+[data-testid="stSidebar"] .stCheckbox {
+    margin-top: 0 !important;
+    margin-bottom: 2px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label p,
+[data-testid="stSidebar"] .stCheckbox label p {
+    margin: 0 !important;
+    font-size: 0.88rem !important;
+    line-height: 1.4 !important;
+}
+[data-testid="stSidebar"] [data-testid="column"] {
+    gap: 0.25rem !important;
 }
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-    margin-top: 2px !important;
-    margin-bottom: 2px !important;
-    padding: 0 !important;
+    margin-top: 4px !important;
+    margin-bottom: 4px !important;
 }
-[data-testid="stSidebar"] .sidebar-ui-version,
-[data-testid="stSidebar"] .sidebar-ui-version p {
-    margin-top: 6px !important;
-    margin-bottom: 0 !important;
-    padding: 0 !important;
-    font-size: 0.72rem !important;
-    color: #94a3b8 !important;
-    line-height: 1.2 !important;
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    font-size: 0.78rem !important;
 }
 [data-testid="stSidebar"] .stButton button {
-    padding-top: 0.25rem !important;
-    padding-bottom: 0.25rem !important;
-    min-height: 2rem !important;
-    font-size: 0.82rem !important;
+    padding-top: 0.3rem !important;
+    padding-bottom: 0.3rem !important;
+    min-height: 2.1rem !important;
+    font-size: 0.84rem !important;
 }
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3 {
-    margin-top: 0.35rem !important;
-    margin-bottom: 0.15rem !important;
-    padding: 0 !important;
+    margin-top: 0.5rem !important;
+    margin-bottom: 0.35rem !important;
     font-size: 1rem !important;
 }
 """
