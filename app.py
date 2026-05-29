@@ -140,8 +140,8 @@ def _render_sidebar_apt_title(apt_name: str, *, is_first: bool = False) -> None:
     safe_name = html.escape(str(apt_name))
     margin_top = "6px" if is_first else "15px"
     st.sidebar.markdown(
-        f"<div style='margin-top: {margin_top}; margin-bottom: 5px; "
-        f"font-weight: bold; font-size: 1.1em; color: #1e293b;'>{safe_name}</div>",
+        f"<div style='margin-top: {margin_top}; margin-bottom: -5px; "
+        f"font-weight: bold; font-size: 15px; color: #1e293b;'>{safe_name}</div>",
         unsafe_allow_html=True,
     )
 
