@@ -108,26 +108,10 @@ html, body, [class*="css"] {
 }
 div[data-testid="stSidebar"] {
     background-color: #f8fafc;
-    padding-top: 0.5rem !important;
 }
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 0 !important;
-}
+/* 사이드바 내부 최상단 여백만 축소 */
 [data-testid="stSidebarUserContent"] {
-    padding-top: 0 !important;
-    margin-top: 0 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    padding-top: 0 !important;
-    gap: 0.35rem !important;
-}
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 0.5rem !important;
-    margin-top: 0 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
-    padding-top: 0 !important;
-    margin-top: 0 !important;
+    padding-top: 1rem !important;
 }
 
 /* 상단 탭 UI 강화 */
