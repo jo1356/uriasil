@@ -80,6 +80,152 @@ _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "주공아파트 5단지": "잠실주공5단지",
 }
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
+_SIDEBAR_UI_VERSION = "컴팩트 사이드바 v1"
+
+# Streamlit 래퍼 div 여백까지 덮어쓰는 사이드바 전용 CSS
+_SIDEBAR_COMPACT_CSS = """
+/* === 사이드바 강제 컴팩트 (data-testid 래퍼 타겟) === */
+section[data-testid="stSidebar"] {
+    padding-top: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="block-container"] {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="element-container"],
+[data-testid="stSidebar"] [data-testid="stElementContainer"],
+[data-testid="stSidebar"] .element-container,
+[data-testid="stSidebar"] .stElementContainer {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdown"],
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr {
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
+    padding: 0 !important;
+    border: none !important;
+    border-top: 1px solid #e0e0e0 !important;
+}
+[data-testid="stSidebar"] hr.sidebar-apt-sep {
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
+}
+[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 0 !important;
+}
+[data-testid="stSidebar"] div.row-widget.stCheckbox,
+[data-testid="stSidebar"] [data-testid="stCheckbox"],
+[data-testid="stSidebar"] .stCheckbox {
+    min-height: 0px !important;
+    margin-top: -10px !important;
+    margin-bottom: -10px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] > label,
+[data-testid="stSidebar"] .stCheckbox > label {
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label p,
+[data-testid="stSidebar"] .stCheckbox label p {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 0.86rem !important;
+    line-height: 1.05 !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-apt-title) {
+    margin-top: 0 !important;
+    margin-bottom: -12px !important;
+    padding-bottom: 0 !important;
+}
+[data-testid="stSidebar"] .sidebar-apt-title {
+    margin-top: 12px !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+    font-size: 0.92rem !important;
+    font-weight: 600 !important;
+    line-height: 1.1 !important;
+    color: #1e293b !important;
+}
+[data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
+    margin-top: 2px !important;
+}
+[data-testid="stSidebar"] .sidebar-apt-title p {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="column"] {
+    gap: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="column"] > div {
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    margin-top: 2px !important;
+    margin-bottom: 2px !important;
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] .sidebar-ui-version,
+[data-testid="stSidebar"] .sidebar-ui-version p {
+    margin-top: 6px !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+    font-size: 0.72rem !important;
+    color: #94a3b8 !important;
+    line-height: 1.2 !important;
+}
+[data-testid="stSidebar"] .stButton button {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+    min-height: 2rem !important;
+    font-size: 0.82rem !important;
+}
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.15rem !important;
+    padding: 0 !important;
+    font-size: 1rem !important;
+}
+"""
 
 _PAGE_CSS = """
 <style>
@@ -129,108 +275,14 @@ div[data-testid="stSidebar"] {
     background: #e0e7ff;
     border-bottom: 4px solid #1d4ed8;
 }
-
-/* 사이드바 울트라 컴팩트 + 그룹핑 */
-div[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0.05rem !important;
-}
-div[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="stMarkdown"],
-div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
-div[data-testid="stSidebar"] [data-testid="stElementContainer"],
-div[data-testid="stSidebar"] .stElementContainer {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-div[data-testid="stSidebar"] .stCheckbox {
-    margin-top: -0.7rem !important;
-    margin-bottom: -0.7rem !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    min-height: 0 !important;
-}
-div[data-testid="stSidebar"] .stCheckbox > label {
-    min-height: 0.95rem !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    margin: 0 !important;
-}
-div[data-testid="stSidebar"] .stCheckbox label p {
-    margin: 0 !important;
-    padding: 0 !important;
-    font-size: 0.86rem !important;
-    line-height: 1.1 !important;
-}
-div[data-testid="stSidebar"] .sidebar-apt-title {
-    margin-top: 1.15rem !important;
-    margin-bottom: 0 !important;
-    padding: 0 !important;
-    font-size: 0.92rem !important;
-    font-weight: 600 !important;
-    line-height: 1.15 !important;
-    color: #1e293b !important;
-}
-div[data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
-    margin-top: 0.25rem !important;
-}
-div[data-testid="stSidebar"] .sidebar-apt-title p {
-    margin: 0 !important;
-    padding: 0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-apt-title) {
-    margin-bottom: -0.35rem !important;
-}
-div[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
-    margin: 0 !important;
-    padding: 0 !important;
-    line-height: 0 !important;
-}
-div[data-testid="stSidebar"] hr,
-div[data-testid="stSidebar"] hr.sidebar-apt-sep {
-    margin: 10px 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    border-top: 1px solid #e0e0e0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(hr.sidebar-apt-sep) {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-    padding: 0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-    margin-top: 0.1rem !important;
-    margin-bottom: 0.1rem !important;
-    padding: 0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-    font-size: 0.78rem !important;
-    margin: 0 !important;
-}
-div[data-testid="stSidebar"] [data-testid="column"] {
-    gap: 0.1rem !important;
-}
-div[data-testid="stSidebar"] .stButton button {
-    padding-top: 0.25rem !important;
-    padding-bottom: 0.25rem !important;
-    min-height: 2rem !important;
-    font-size: 0.82rem !important;
-}
-div[data-testid="stSidebar"] h2,
-div[data-testid="stSidebar"] h3 {
-    margin-top: 0.35rem !important;
-    margin-bottom: 0.2rem !important;
-    padding: 0 !important;
-    font-size: 1rem !important;
-}
+""" + _SIDEBAR_COMPACT_CSS + """
 </style>
 """
+
+
+def _inject_sidebar_compact_css() -> None:
+    """사이드바 렌더 직전 CSS 재주입 (Cloud 배포 반영 확인용)."""
+    st.markdown(f"<style>{_SIDEBAR_COMPACT_CSS}</style>", unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner="매매 데이터 불러오는 중...")
@@ -632,6 +684,8 @@ def _render_sidebar_series_selector(
     if selected_set:
         st.caption(f"✓ {len(selected_set)}개 선택")
 
+    st.sidebar.caption(f"UI Version: {_SIDEBAR_UI_VERSION}")
+
     return list(selected_set)
 
 
@@ -864,6 +918,7 @@ def _render_sidebar(
     default_labels: list[str],
 ) -> list[str]:
     with st.sidebar:
+        _inject_sidebar_compact_css()
         selected_series = _render_sidebar_series_selector(
             sale_df,
             rent_df,
