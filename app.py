@@ -36,12 +36,12 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v36_outlier_q3"
+_DATA_CACHE_VERSION = "v37_outlier_p90"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
-_OUTLIER_Q3_QUANTILE = 0.75
-_OUTLIER_Q3_RATIO = 0.60
+_OUTLIER_P90_QUANTILE = 0.90
+_OUTLIER_P90_RATIO = 0.55
 _OUTLIER_MIN_GROUP_SIZE = 3
 _OUTLIER_ROW_BG = "#f0f0f0"
 _OUTLIER_ROW_COLOR = "#888888"
@@ -174,19 +174,19 @@ def get_prepared_rent_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.Data
     return add_outlier_flags(prepare_rent_dashboard_data(raw, targets), is_rent=True)
 
 
-def _group_q3(series: pd.Series) -> float:
-    """그룹 거래 건수가 충분할 때만 Q3(75백분위) 반환."""
+def _group_p90(series: pd.Series) -> float:
+    """그룹 거래 건수가 충분할 때만 P90(90백분위) 반환."""
     valid = series.dropna()
     if len(valid) <= _OUTLIER_MIN_GROUP_SIZE:
         return float("nan")
-    return float(valid.quantile(_OUTLIER_Q3_QUANTILE))
+    return float(valid.quantile(_OUTLIER_P90_QUANTILE))
 
 
 def add_outlier_flags(df: pd.DataFrame, *, is_rent: bool) -> pd.DataFrame:
     """
     임대세대 등 특수 저가 거래 플래그 — 행 삭제 없이 is_outlier 컬럼만 추가.
-    전월세: [계약연도, 단지명, 평형] 그룹 Q3(75%)의 60% 미만.
-    연도 그룹 건수 ≤3이면 [단지명, 평형] 전체 기간 Q3로 대체, 그것도 부족하면 미판정.
+    전월세: [계약연도, 단지명, 평형] 그룹 P90(90%)의 55% 미만.
+    연도 그룹 건수 ≤3이면 [단지명, 평형] 전체 기간 P90으로 대체, 그것도 부족하면 미판정.
     """
     if df.empty:
         out = df.copy()
@@ -230,16 +230,16 @@ def add_outlier_flags(df: pd.DataFrame, *, is_rent: bool) -> pd.DataFrame:
     year_group = ["_outlier_year", "_outlier_apt", "_outlier_pyeong"]
     apt_pyeong_group = ["_outlier_apt", "_outlier_pyeong"]
 
-    q3_by_year = group_keys.groupby(year_group, dropna=False)["_outlier_price"].transform(_group_q3)
-    q3_all_period = group_keys.groupby(apt_pyeong_group, dropna=False)["_outlier_price"].transform(
-        _group_q3
+    p90_by_year = group_keys.groupby(year_group, dropna=False)["_outlier_price"].transform(_group_p90)
+    p90_all_period = group_keys.groupby(apt_pyeong_group, dropna=False)["_outlier_price"].transform(
+        _group_p90
     )
-    reference_q3 = q3_by_year.fillna(q3_all_period)
+    reference_p90 = p90_by_year.fillna(p90_all_period)
 
     out["is_outlier"] = (
         price.notna()
-        & reference_q3.notna()
-        & (price < reference_q3 * _OUTLIER_Q3_RATIO)
+        & reference_p90.notna()
+        & (price < reference_p90 * _OUTLIER_P90_RATIO)
     )
     return out
 
