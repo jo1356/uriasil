@@ -827,13 +827,19 @@ def get_apartment_select_column(df: pd.DataFrame) -> str:
 def default_chart_selection(
     all_labels: list[str],
     target_pyeong: list[str] | None,
+    *,
+    default_pyeong_groups: list[str] | None = None,
 ) -> list[str]:
-    """기본값: 리스트에 있는 모든 단지(24·34평) 조합."""
+    """
+    차트 기본 선택 라벨.
+    default_pyeong_groups: 초기 접속용 평형(예: ['24평형']만). None이면 target_pyeong 사용.
+    """
     if not all_labels:
         return []
-    if not target_pyeong:
+    groups = default_pyeong_groups if default_pyeong_groups is not None else target_pyeong
+    if not groups:
         return all_labels
-    selected = [lb for lb in all_labels if any(f"({p})" in lb for p in target_pyeong)]
+    selected = [lb for lb in all_labels if any(f"({p})" in lb for p in groups)]
     return selected or all_labels
 
 

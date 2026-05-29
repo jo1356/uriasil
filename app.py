@@ -36,6 +36,8 @@ from rent_service import (
 )
 
 _DATA_CACHE_VERSION = "v26_sinbanpo2_apt_match"
+_UX_SELECTION_VERSION = "default_24pyeong_v1"
+_DEFAULT_PYEONG_GROUPS = ["24평형"]
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -122,6 +124,69 @@ div[data-testid="stSidebar"] {
     color: #1d4ed8;
     background: #e0e7ff;
     border-bottom: 4px solid #1d4ed8;
+}
+
+/* 사이드바 컴팩트 레이아웃 */
+div[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.2rem !important;
+}
+div[data-testid="stSidebar"] .stCheckbox {
+    margin-top: -0.55rem !important;
+    margin-bottom: -0.55rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    min-height: 0 !important;
+}
+div[data-testid="stSidebar"] .stCheckbox > label {
+    min-height: 1.1rem !important;
+    padding-top: 0.05rem !important;
+    padding-bottom: 0.05rem !important;
+}
+div[data-testid="stSidebar"] .stCheckbox label p {
+    margin: 0 !important;
+    font-size: 0.86rem !important;
+    line-height: 1.15 !important;
+}
+div[data-testid="stSidebar"] .sidebar-apt-title {
+    margin: 0.35rem 0 0.05rem 0 !important;
+    padding: 0 !important;
+    font-size: 0.92rem !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+}
+div[data-testid="stSidebar"] .sidebar-apt-title p {
+    margin: 0 !important;
+}
+div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    margin-top: 0.1rem !important;
+    margin-bottom: 0.15rem !important;
+    padding: 0 !important;
+}
+div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    font-size: 0.78rem !important;
+    margin: 0 !important;
+}
+div[data-testid="stSidebar"] hr {
+    margin: 0.2rem 0 !important;
+    border: none !important;
+    border-top: 1px solid #e2e8f0 !important;
+    opacity: 0.85;
+}
+div[data-testid="stSidebar"] [data-testid="column"] {
+    gap: 0.15rem !important;
+}
+div[data-testid="stSidebar"] .stButton button {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+    min-height: 2rem !important;
+    font-size: 0.82rem !important;
+}
+div[data-testid="stSidebar"] h2, div[data-testid="stSidebar"] h3 {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.25rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    font-size: 1rem !important;
 }
 </style>
 """
@@ -226,15 +291,37 @@ def _clear_data_caches() -> None:
     _prepare_aligned_chart_df.clear()
 
 
+def _clear_series_selection_session() -> None:
+    for key in list(st.session_state.keys()):
+        if key.startswith("series_cb_") or key == "series_selected":
+            del st.session_state[key]
+
+
 def _reset_ui_session_if_data_version_changed() -> None:
     """데이터/표기 버전 변경 시 사이드바 체크박스 세션 초기화."""
     version_key = "_app_data_version"
     if st.session_state.get(version_key) == _DATA_CACHE_VERSION:
         return
-    for key in list(st.session_state.keys()):
-        if key.startswith("series_cb_") or key == "series_selected":
-            del st.session_state[key]
+    _clear_series_selection_session()
     st.session_state[version_key] = _DATA_CACHE_VERSION
+
+
+def _reset_ui_session_if_selection_policy_changed() -> None:
+    """초기 24평형 기본 선택 등 UX 정책 변경 시 1회 세션 초기화."""
+    version_key = "_ux_selection_version"
+    if st.session_state.get(version_key) == _UX_SELECTION_VERSION:
+        return
+    _clear_series_selection_session()
+    st.session_state[version_key] = _UX_SELECTION_VERSION
+
+
+def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[str]:
+    group_set = set(groups)
+    return {
+        lb
+        for lb in all_series
+        if _extract_label_parts(lb)[1] in group_set
+    }
 
 
 def _format_amount_korean(manwon: object) -> str:
@@ -426,7 +513,7 @@ def _render_sidebar_series_selector(
     if selected_key not in st.session_state:
         initial = {lb for lb in (default_labels or []) if lb in all_series}
         if not initial:
-            initial = set(all_series)
+            initial = _labels_for_pyeong_groups(all_series, _DEFAULT_PYEONG_GROUPS)
         _apply_series_selection(key_prefix, all_series, initial)
 
     st.subheader("🏠 비교할 단지 · 평형")
@@ -455,7 +542,10 @@ def _render_sidebar_series_selector(
 
     st.caption("단지별 평형")
     for apt in apt_list:
-        st.markdown(f"**{apt}**")
+        st.markdown(
+            f'<p class="sidebar-apt-title"><strong>{apt}</strong></p>',
+            unsafe_allow_html=True,
+        )
         labels = apt_map[apt]
         if len(labels) == 1:
             label = labels[0]
@@ -477,8 +567,6 @@ def _render_sidebar_series_selector(
                     st.session_state[cb_key] = label in selected_now
                 with py_cols[idx % 2]:
                     st.checkbox(display_pyeong, key=cb_key)
-        if apt != apt_list[-1]:
-            st.divider()
 
     selected_set: set[str] = set()
     for label in all_series:
@@ -929,6 +1017,7 @@ def main() -> None:
     st.markdown('<p class="main-header">🏢 아파트 실거래가 대시보드</p>', unsafe_allow_html=True)
 
     _reset_ui_session_if_data_version_changed()
+    _reset_ui_session_if_selection_policy_changed()
 
     sale_status = cache_status()
     rent_status = rent_cache_status()
@@ -937,7 +1026,11 @@ def main() -> None:
 
     config_pyeong = parse_target_pyeong(getattr(config, "TARGET_PYEONG", None))
     merged_series_options = _merge_series_labels(sale_df, rent_df)
-    default_labels = default_chart_selection(merged_series_options, config_pyeong)
+    default_labels = default_chart_selection(
+        merged_series_options,
+        config_pyeong,
+        default_pyeong_groups=_DEFAULT_PYEONG_GROUPS,
+    )
 
     selected_series = _render_sidebar(
         sale_status,
