@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -33,7 +35,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v21_unified_tab_series_ui"
+_DATA_CACHE_VERSION = "v22_checkbox_grid_ui"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -316,18 +318,42 @@ def _get_series_labels_from_df(df: pd.DataFrame) -> list[str]:
     return sort_chart_labels_for_ui(sort_chart_labels(labels, targets))
 
 
-def _filter_series_by_apartments(
-    series_labels: list[str],
-    selected_apartments: list[str],
-) -> list[str]:
-    if not selected_apartments:
-        return series_labels
-    apt_set = set(selected_apartments)
-    return [
-        lb
-        for lb in series_labels
-        if _extract_label_parts(lb)[0] in apt_set
-    ]
+def _series_checkbox_key(key_prefix: str, chart_label: str) -> str:
+    digest = hashlib.sha256(chart_label.encode("utf-8")).hexdigest()[:16]
+    return f"{key_prefix}_cb_{digest}"
+
+
+def _build_apt_series_map(series_labels: list[str]) -> dict[str, list[str]]:
+    """아파트명 → 해당 단지의 차트라벨 목록."""
+    apt_map: dict[str, list[str]] = {}
+    for label in series_labels:
+        apt, _ = _extract_label_parts(label)
+        apt_map.setdefault(apt, []).append(label)
+    for apt in apt_map:
+        apt_map[apt] = sorted(
+            apt_map[apt],
+            key=lambda lb: _PYEONG_PRIORITY.get(_extract_label_parts(lb)[1], 999),
+        )
+    return apt_map
+
+
+def _sync_checkbox_states(
+    key_prefix: str,
+    all_series: list[str],
+    selected: set[str],
+) -> None:
+    for label in all_series:
+        st.session_state[_series_checkbox_key(key_prefix, label)] = label in selected
+
+
+def _apply_series_selection(
+    key_prefix: str,
+    all_series: list[str],
+    selected: set[str],
+) -> None:
+    selected_key = f"{key_prefix}_selected"
+    st.session_state[selected_key] = list(selected)
+    _sync_checkbox_states(key_prefix, all_series, selected)
 
 
 def _render_apartment_series_selector(
@@ -337,7 +363,7 @@ def _render_apartment_series_selector(
     default_labels: list[str] | None = None,
 ) -> list[str]:
     """
-    매매·전월세 탭 공통 — 갭 분석과 동일한 타겟명·동적 평형 표기로 시리즈 선택.
+    매매·전월세 탭 — 4개 핵심 버튼 + 아파트별 체크박스 그리드.
     반환값은 차트라벨(내부 value) 리스트.
     """
     all_series = _get_series_labels_from_df(df)
@@ -345,59 +371,73 @@ def _render_apartment_series_selector(
         st.warning("표시할 단지·평형 데이터가 없습니다.")
         return []
 
-    apt_col = get_apartment_select_column(df)
-    apt_options = sort_apartment_options_for_ui(
-        df[apt_col].dropna().astype(str).unique().tolist()
-    )
+    selected_key = f"{key_prefix}_selected"
+    apt_map = _build_apt_series_map(all_series)
+    apt_list = sort_apartment_options_for_ui(list(apt_map.keys()))
+
+    if selected_key not in st.session_state:
+        initial = {lb for lb in (default_labels or []) if lb in all_series}
+        if not initial:
+            initial = set(all_series)
+        _apply_series_selection(key_prefix, all_series, initial)
 
     st.markdown("##### 🏠 비교할 단지 · 평형")
-    apt_key = f"{key_prefix}_apt_filter"
-    series_key = f"{key_prefix}_series_select"
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("전체 단지", key=f"{key_prefix}_apt_all", use_container_width=True):
-            st.session_state[apt_key] = apt_options.copy()
+    btn1, btn2, btn3, btn4 = st.columns(4)
+    with btn1:
+        if st.button("전체 단지 선택", key=f"{key_prefix}_btn_all", use_container_width=True):
+            _apply_series_selection(key_prefix, all_series, set(all_series))
             st.rerun()
-    with col_b:
-        if st.button("단지 선택 해제", key=f"{key_prefix}_apt_clear", use_container_width=True):
-            st.session_state[apt_key] = []
+    with btn2:
+        if st.button("24평형 선택", key=f"{key_prefix}_btn_24", use_container_width=True):
+            picked = {
+                lb
+                for lb in all_series
+                if _extract_label_parts(lb)[1] == "24평형"
+            }
+            _apply_series_selection(key_prefix, all_series, picked)
             st.rerun()
-
-    selected_apts = st.multiselect(
-        "아파트 (비우면 전체)",
-        options=apt_options,
-        placeholder="전체 단지",
-        key=apt_key,
-    )
-
-    filtered_series = _filter_series_by_apartments(all_series, selected_apts)
-    if not filtered_series:
-        st.info("선택한 아파트에 해당하는 평형 데이터가 없습니다.")
-        return []
-
-    defaults = [lb for lb in (default_labels or []) if lb in filtered_series]
-    if series_key not in st.session_state and defaults:
-        st.session_state[series_key] = defaults
-
-    col_c, col_d = st.columns(2)
-    with col_c:
-        if st.button("전체 평형", key=f"{key_prefix}_series_all", use_container_width=True):
-            st.session_state[series_key] = filtered_series.copy()
+    with btn3:
+        if st.button("34평형 선택", key=f"{key_prefix}_btn_34", use_container_width=True):
+            picked = {
+                lb
+                for lb in all_series
+                if _extract_label_parts(lb)[1] == "34평형"
+            }
+            _apply_series_selection(key_prefix, all_series, picked)
             st.rerun()
-    with col_d:
-        if st.button("평형 선택 해제", key=f"{key_prefix}_series_clear", use_container_width=True):
-            st.session_state[series_key] = []
+    with btn4:
+        if st.button("전체 선택 해제", key=f"{key_prefix}_btn_clear", use_container_width=True):
+            _apply_series_selection(key_prefix, all_series, set())
             st.rerun()
 
-    selected_series = st.multiselect(
-        "단지 + 평형",
-        options=filtered_series,
-        format_func=_format_chart_label_display,
-        placeholder="단지(평형)을 선택하세요",
-        key=series_key,
-    )
-    return selected_series
+    grid_cols = 4
+    for row_start in range(0, len(apt_list), grid_cols):
+        row_apts = apt_list[row_start : row_start + grid_cols]
+        cols = st.columns(len(row_apts))
+        for col, apt in zip(cols, row_apts):
+            with col:
+                st.markdown(f"**{apt}**")
+                for label in apt_map[apt]:
+                    _, pyeong = _extract_label_parts(label)
+                    display_pyeong = _format_pyeong_for_apt(apt, pyeong)
+                    cb_key = _series_checkbox_key(key_prefix, label)
+                    if cb_key not in st.session_state:
+                        selected_now = set(st.session_state.get(selected_key, []))
+                        st.session_state[cb_key] = label in selected_now
+                    st.checkbox(display_pyeong, key=cb_key)
+
+    selected_set: set[str] = set()
+    for label in all_series:
+        if st.session_state.get(_series_checkbox_key(key_prefix, label), False):
+            selected_set.add(label)
+    st.session_state[selected_key] = list(selected_set)
+
+    if selected_set:
+        summary = ", ".join(_format_chart_label_display(lb) for lb in sorted(selected_set))
+        st.caption(f"선택됨 ({len(selected_set)}개): {summary}")
+
+    return list(selected_set)
 
 
 def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
@@ -791,7 +831,7 @@ def _render_market_tab(
         default_labels=default_labels,
     )
     if not selected_series:
-        st.warning("위에서 **아파트**와 **단지+평형**을 1개 이상 선택해 주세요.")
+        st.warning("위 체크박스에서 **단지·평형**을 1개 이상 선택해 주세요.")
         return
 
     st.divider()
