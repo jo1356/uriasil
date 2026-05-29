@@ -108,6 +108,26 @@ html, body, [class*="css"] {
 }
 div[data-testid="stSidebar"] {
     background-color: #f8fafc;
+    padding-top: 0.5rem !important;
+}
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 0 !important;
+}
+[data-testid="stSidebarUserContent"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    padding-top: 0 !important;
+    gap: 0.35rem !important;
+}
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 0.5rem !important;
+    margin-top: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
 }
 
 /* 상단 탭 UI 강화 */
