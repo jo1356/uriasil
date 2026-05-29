@@ -208,38 +208,22 @@ def get_sorted_chart_options(
 
 
 @st.cache_data(show_spinner=False)
-def build_chart_cached(
+def _prepare_aligned_chart_df(
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
-    y_axis_title: str,
-    chart_height: int,
     _cache_version: str = _DATA_CACHE_VERSION,
-):
-    labels = list(selected_labels)
-    display_fmt = _format_chart_label_display
-    if not labels:
-        return build_price_chart(
-            pd.DataFrame(),
-            labels,
-            y_axis_title=y_axis_title,
-            chart_height=chart_height,
-            label_formatter=display_fmt,
-        )
-    aligned = prepare_chart_comparison_data(_df, labels)
-    return build_price_chart(
-        aligned,
-        labels,
-        y_axis_title=y_axis_title,
-        chart_height=chart_height,
-        label_formatter=display_fmt,
-    )
+) -> pd.DataFrame:
+    """차트용 정렬·nearest 매핑만 캐시 (표시 포맷터는 캐시 밖에서 적용)."""
+    if not selected_labels:
+        return pd.DataFrame()
+    return prepare_chart_comparison_data(_df, list(selected_labels))
 
 
 def _clear_data_caches() -> None:
     get_prepared_sale_data.clear()
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
-    build_chart_cached.clear()
+    _prepare_aligned_chart_df.clear()
 
 
 def _reset_ui_session_if_data_version_changed() -> None:
@@ -305,8 +289,16 @@ def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
     return pyeong
 
 
+def _extract_label_parts(label: str) -> tuple[str, str]:
+    text = str(label).strip()
+    if " (" in text and text.endswith(")"):
+        apt, p = text.rsplit(" (", 1)
+        return apt.strip(), p.rstrip(")").strip()
+    return text, ""
+
+
 def _format_chart_label_display(label: str) -> str:
-    """사이드바 체크박스 — 단지별 평형 표기 커스텀."""
+    """차트 범례·툴팁 — 단지별 평형 표기 커스텀."""
     apt, pyeong = _extract_label_parts(label)
     if _is_jamsil_jugong5_apt(apt):
         display_p = _JUGONG5_PYEONG_DISPLAY.get(pyeong, pyeong)
@@ -320,12 +312,22 @@ def _format_chart_label_display(label: str) -> str:
     return label
 
 
-def _extract_label_parts(label: str) -> tuple[str, str]:
-    text = str(label).strip()
-    if " (" in text and text.endswith(")"):
-        apt, p = text.rsplit(" (", 1)
-        return apt.strip(), p.rstrip(")").strip()
-    return text, ""
+def build_chart_cached(
+    df: pd.DataFrame,
+    selected_labels: tuple[str, ...],
+    y_axis_title: str,
+    chart_height: int,
+) -> go.Figure:
+    """정렬 데이터는 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
+    labels = list(selected_labels)
+    aligned = _prepare_aligned_chart_df(df, tuple(selected_labels))
+    return build_price_chart(
+        aligned,
+        labels,
+        y_axis_title=y_axis_title,
+        chart_height=chart_height,
+        label_formatter=_format_chart_label_display,
+    )
 
 
 def sort_chart_labels_for_ui(labels: list[str]) -> list[str]:

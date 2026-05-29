@@ -48,8 +48,12 @@ def _format_hover_line(
     )
 
 
-def _build_hover_block_for_timeline(day_df: pd.DataFrame) -> str:
+def _build_hover_block_for_timeline(
+    day_df: pd.DataFrame,
+    label_formatter: Callable[[str], str] | None = None,
+) -> str:
     """기준일(row)마다 nearest로 모인 단지들 — 고액순·최고가 대비 % 재계산."""
+    fmt = label_formatter or (lambda s: s)
     valid = day_df.dropna(subset=["거래금액(만원)"])
     if valid.empty:
         return ""
@@ -160,7 +164,7 @@ def build_price_chart(
     anchor_blocks: list[str] = []
 
     for ref_date, day_df in chart_df.groupby(X_COL, sort=True):
-        block = _build_hover_block_for_timeline(day_df)
+        block = _build_hover_block_for_timeline(day_df, label_formatter=fmt)
         if not block:
             continue
         anchor_x.append(pd.Timestamp(ref_date))
