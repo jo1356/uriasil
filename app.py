@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v30_raw_line_no_aggregation"
+_DATA_CACHE_VERSION = "v31_plotly_seq_x_all_points"
 _CHART_SORT_COLS = ("계약일자", "계약일자_표시")
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
@@ -1001,14 +1001,16 @@ def _render_market_tab(
     if is_rent:
         st.caption(
             "월세는 **보증금 + (월세×250)** 으로 환산 전세가(억)를 계산해 표시합니다. "
-            "차트는 **개별 거래 꺾은선**이며, 마우스를 올리면 **±6개월 nearest** 기준으로 "
-            "선택 단지들의 거래를 **단일 말풍선**에 고액순·% 비교 표시합니다."
+            "차트는 Plotly **lines+markers**로 거래 순서(1→N)마다 점을 찍으며, "
+            "동일 날짜·동일 월에도 **평균·병합 없이** 모든 건이 표시됩니다. "
+            "마우스를 올리면 **±6개월 nearest** 기준 **단일 말풍선** 비교가 나타납니다."
         )
     else:
         st.caption(
-            "모든 실거래를 **날짜순 꺾은선**으로 표시합니다 (평균·집계 없음). "
-            "마우스를 올리면 세로선과 **단일 말풍선**에 각 단지의 **가장 가까운 거래(±6개월 이내)** 가 "
-            "`단지명 / 매매가 / 실제거래일 / 최고가 대비 %` 로 고액순 표시됩니다."
+            "Plotly **lines+markers** — 계약일 순으로 1번부터 N번까지 **모든 실거래**를 "
+            "꺾은선으로 연결합니다 (라이브러리 자동 집계 없음). "
+            "마우스를 올리면 **단일 말풍선**에 각 단지 **가장 가까운 거래(±6개월)** 가 "
+            "고액순·% 비교로 표시됩니다."
         )
     st.divider()
 
