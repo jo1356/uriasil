@@ -522,18 +522,24 @@ def _render_sidebar_series_selector(
             if cb_key not in st.session_state:
                 selected_now = set(st.session_state.get(selected_key, []))
                 st.session_state[cb_key] = label in selected_now
-            st.sidebar.checkbox(display_pyeong, key=cb_key)
+            col1, _col2 = st.sidebar.columns(2)
+            with col1:
+                st.checkbox(display_pyeong, key=cb_key)
         else:
-            py_cols = st.sidebar.columns(2)
-            for idx, label in enumerate(labels):
+            col1, col2 = st.sidebar.columns(2)
+            sorted_labels = sorted(
+                labels,
+                key=lambda lb: _PYEONG_PRIORITY.get(_extract_label_parts(lb)[1], 999),
+            )
+            for col, label in zip((col1, col2), sorted_labels[:2]):
                 _, pyeong = _extract_label_parts(label)
                 display_pyeong = _format_pyeong_for_apt(apt, pyeong)
                 cb_key = _series_checkbox_key(key_prefix, label)
                 if cb_key not in st.session_state:
                     selected_now = set(st.session_state.get(selected_key, []))
                     st.session_state[cb_key] = label in selected_now
-                with py_cols[idx % 2]:
-                    st.sidebar.checkbox(display_pyeong, key=cb_key)
+                with col:
+                    st.checkbox(display_pyeong, key=cb_key)
         if apt_idx < len(apt_list) - 1:
             _render_sidebar_apt_separator()
 
