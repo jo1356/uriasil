@@ -440,7 +440,7 @@ def _render_sidebar_series_selector(
                 if cb_key not in st.session_state:
                     selected_now = set(st.session_state.get(selected_key, []))
                     st.session_state[cb_key] = label in selected_now
-                with py_cols[idx]:
+                with py_cols[idx % 2]:
                     st.checkbox(display_pyeong, key=cb_key)
         if apt != apt_list[-1]:
             st.divider()
