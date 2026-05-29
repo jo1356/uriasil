@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v26_sinbanpo2_apt_match"
+_DATA_CACHE_VERSION = "v27_scatter_trend_chart"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -234,23 +234,40 @@ def get_sorted_chart_options(
     return sort_chart_labels(labels, targets)
 
 
+def prepare_raw_chart_data(
+    df: pd.DataFrame,
+    selected_labels: list[str],
+) -> pd.DataFrame:
+    """차트용 실거래 원본 — 개별 계약일·금액 그대로 (집계/nearest 없음)."""
+    if not selected_labels:
+        return pd.DataFrame()
+    cols = ["차트라벨", "계약일자_표시", "거래금액(만원)", "계약일자"]
+    use_cols = [c for c in cols if c in df.columns]
+    out = df.loc[df["차트라벨"].isin(selected_labels), use_cols].copy()
+    out = out.dropna(subset=["거래금액(만원)", "계약일자_표시"])
+    if out.empty:
+        return out
+    out["계약일자_표시"] = pd.to_datetime(out["계약일자_표시"])
+    return out.sort_values("계약일자_표시").reset_index(drop=True)
+
+
 @st.cache_data(show_spinner=False)
-def _prepare_aligned_chart_df(
+def _prepare_raw_chart_df(
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     _cache_version: str = _DATA_CACHE_VERSION,
 ) -> pd.DataFrame:
-    """차트용 정렬·nearest 매핑만 캐시 (표시 포맷터는 캐시 밖에서 적용)."""
+    """차트용 실거래 DataFrame 캐시."""
     if not selected_labels:
         return pd.DataFrame()
-    return prepare_chart_comparison_data(_df, list(selected_labels))
+    return prepare_raw_chart_data(_df, list(selected_labels))
 
 
 def _clear_data_caches() -> None:
     get_prepared_sale_data.clear()
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
-    _prepare_aligned_chart_df.clear()
+    _prepare_raw_chart_df.clear()
 
 
 def _clear_series_selection_session() -> None:
@@ -375,11 +392,11 @@ def build_chart_cached(
     y_axis_title: str,
     chart_height: int,
 ) -> go.Figure:
-    """정렬 데이터는 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
+    """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
     labels = list(selected_labels)
-    aligned = _prepare_aligned_chart_df(df, tuple(selected_labels))
+    raw_chart = _prepare_raw_chart_df(df, tuple(selected_labels))
     return build_price_chart(
-        aligned,
+        raw_chart,
         labels,
         y_axis_title=y_axis_title,
         chart_height=chart_height,
@@ -963,12 +980,12 @@ def _render_market_tab(
     if is_rent:
         st.caption(
             "월세는 **보증금 + (월세×250)** 으로 환산 전세가(억)를 계산해 표시합니다. "
-            "통합 툴팁·세로선·±6개월 nearest 비교가 동일하게 적용됩니다."
+            "개별 계약은 **산점도**, **90일 이동평균선**은 추세(방향성)를 나타냅니다."
         )
     else:
         st.caption(
-            "마우스를 올리면 세로선과 **단일 말풍선**에 각 단지의 **가장 가까운 거래(±6개월 이내)** 가 "
-            "`단지명 / 매매가 / 실제거래일 / 최고가 대비 %` 로 고액순 표시됩니다."
+            "모든 실거래는 **개별 점(산점도)** 으로 표시되며, **90일 이동평균 추세선**으로 "
+            "전체 가격 흐름을 함께 볼 수 있습니다. 점에 마우스를 올리면 거래일·금액이 표시됩니다."
         )
     st.divider()
 

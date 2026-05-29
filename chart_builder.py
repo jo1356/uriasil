@@ -1,6 +1,6 @@
 """
-실거래가 라인 차트 — 통합 툴팁(세로선 + 단일 말풍선) 전용 빌더.
-입력: app.prepare_chart_comparison_data() 가 만든 정렬·nearest 매핑 DataFrame
+실거래가 차트 — 개별 거래 산점도 + 이동평균 추세선.
+입력: prepare_raw_chart_data() 가 만든 실거래 DataFrame
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 MANWON_PER_EOK = 10_000
-HOVER_LINE_SEP = " / "
-X_COL = "기준일"
+X_COL = "계약일자_표시"
+TREND_ROLLING = "90D"
+SCATTER_MARKER_SIZE = 5
+SCATTER_OPACITY = 0.45
 
 
 def _manwon_to_eok_str(manwon: float) -> str:
@@ -30,48 +32,6 @@ def _format_contract_date_short(contract_ymd: object) -> str:
         return f"{y[2:]}.{m}.{d}"
     ts = pd.Timestamp(contract_ymd)
     return f"{ts.year % 100:02d}.{ts.month:02d}.{ts.day:02d}"
-
-
-def _format_hover_line(
-    label: str,
-    manwon: float,
-    contract_ymd: object,
-    pct: int,
-) -> str:
-    return HOVER_LINE_SEP.join(
-        [
-            label,
-            _manwon_to_eok_str(manwon),
-            _format_contract_date_short(contract_ymd),
-            f"{pct}%",
-        ]
-    )
-
-
-def _build_hover_block_for_timeline(
-    day_df: pd.DataFrame,
-    label_formatter: Callable[[str], str] | None = None,
-) -> str:
-    """기준일(row)마다 nearest로 모인 단지들 — 고액순·최고가 대비 % 재계산."""
-    fmt = label_formatter or (lambda s: s)
-    valid = day_df.dropna(subset=["거래금액(만원)"])
-    if valid.empty:
-        return ""
-
-    max_manwon = float(valid["거래금액(만원)"].max())
-    if max_manwon <= 0:
-        return ""
-
-    rows = valid.sort_values("거래금액(만원)", ascending=False)
-    lines: list[str] = []
-    for _, row in rows.iterrows():
-        manwon = float(row["거래금액(만원)"])
-        pct = int(round(manwon / max_manwon * 100))
-        contract = row.get("계약일자") or row.get("실제거래일_표시")
-        lines.append(
-            _format_hover_line(fmt(str(row["차트라벨"])), manwon, contract, pct)
-        )
-    return "<br>".join(lines)
 
 
 def _format_eok_label(manwon: float) -> str:
@@ -110,22 +70,34 @@ def _yaxis_ticks_eok(y_series: pd.Series) -> tuple[list[float], list[str], float
     return tickvals, ticktext, tick_start - pad, tick_end + pad
 
 
+def _rolling_trend_series(sub: pd.DataFrame) -> pd.DataFrame:
+    """시계열 이동평균 추세선 (90일)."""
+    indexed = (
+        sub[[X_COL, "거래금액(만원)"]]
+        .dropna()
+        .drop_duplicates(subset=[X_COL], keep="last")
+        .set_index(X_COL)
+        .sort_index()
+    )
+    if indexed.empty:
+        return pd.DataFrame(columns=[X_COL, "거래금액(만원)"])
+    rolled = indexed["거래금액(만원)"].rolling(TREND_ROLLING, min_periods=1).mean()
+    return rolled.reset_index()
+
+
 def build_price_chart(
-    aligned_df: pd.DataFrame,
+    chart_df: pd.DataFrame,
     selected_labels: Iterable[str],
     y_axis_title: str = "거래금액",
     chart_height: int = 600,
     label_formatter: Callable[[str], str] | None = None,
 ) -> go.Figure:
     """
-    aligned_df: prepare_chart_comparison_data() 결과
-      - 기준일: 마스터 타임라인 X
-      - 실제거래일_표시 / 계약일자: nearest로 매칭된 실제 거래
-      - 거래금액(만원): 해당 시점 비교용 가격
+    chart_df: 실거래 원본 (차트라벨, 계약일자_표시, 거래금액(만원), 계약일자)
+    개별 거래 = 산점도, 90일 이동평균 = 추세선.
     """
     labels = list(selected_labels)
     fmt = label_formatter or (lambda s: s)
-    chart_df = aligned_df.copy()
 
     if chart_df.empty or X_COL not in chart_df.columns:
         fig = go.Figure()
@@ -136,69 +108,65 @@ def build_price_chart(
         )
         return fig
 
-    chart_df[X_COL] = pd.to_datetime(chart_df[X_COL])
-    chart_df = chart_df.dropna(subset=["거래금액(만원)", X_COL])
+    plot_df = chart_df.copy()
+    plot_df[X_COL] = pd.to_datetime(plot_df[X_COL])
+    plot_df = plot_df.dropna(subset=["거래금액(만원)", X_COL])
 
     fig = go.Figure()
     palette = px.colors.qualitative.Plotly
 
     for idx, label in enumerate(labels):
-        sub = chart_df[chart_df["차트라벨"] == label].sort_values(X_COL)
+        sub = plot_df.loc[plot_df["차트라벨"] == label].sort_values(X_COL)
         if sub.empty:
             continue
         color = palette[idx % len(palette)]
+        display_name = fmt(label)
+
+        hover_dates = sub["계약일자"].map(_format_contract_date_short)
+        hover_prices = sub["거래금액(만원)"].map(_manwon_to_eok_str)
+
         fig.add_trace(
             go.Scatter(
                 x=sub[X_COL],
                 y=sub["거래금액(만원)"],
-                mode="lines+markers",
-                name=fmt(label),
-                hoverinfo="skip",
-                line=dict(width=1.5, color=color),
-                marker=dict(size=5, color=color, line=dict(width=0.5, color="white")),
-            )
-        )
-
-    anchor_x: list[pd.Timestamp] = []
-    anchor_y: list[float] = []
-    anchor_blocks: list[str] = []
-
-    for ref_date, day_df in chart_df.groupby(X_COL, sort=True):
-        block = _build_hover_block_for_timeline(day_df, label_formatter=fmt)
-        if not block:
-            continue
-        anchor_x.append(pd.Timestamp(ref_date))
-        anchor_y.append(float(day_df["거래금액(만원)"].max()))
-        anchor_blocks.append(block)
-
-    if anchor_x:
-        fig.add_trace(
-            go.Scatter(
-                x=anchor_x,
-                y=anchor_y,
                 mode="markers",
-                name="",
-                showlegend=False,
-                customdata=[[b] for b in anchor_blocks],
-                hovertemplate="%{customdata[0]}<extra></extra>",
-                marker=dict(size=16, opacity=0, color="rgba(0,0,0,0)"),
-                hoverlabel=dict(
-                    align="left",
-                    bgcolor="#ffffff",
-                    bordercolor="#d1d5db",
-                    font=dict(size=12, color="#1f2937"),
-                    namelength=0,
+                name=display_name,
+                legendgroup=label,
+                marker=dict(
+                    size=SCATTER_MARKER_SIZE,
+                    color=color,
+                    opacity=SCATTER_OPACITY,
+                    line=dict(width=0.4, color="white"),
+                ),
+                customdata=list(zip(hover_dates, hover_prices)),
+                hovertemplate=(
+                    f"<b>{display_name}</b><br>"
+                    "거래일: %{customdata[0]}<br>"
+                    "금액: %{customdata[1]}<extra></extra>"
                 ),
             )
         )
 
-    tickvals, ticktext, y_lo, y_hi = _yaxis_ticks_eok(chart_df["거래금액(만원)"])
+        trend = _rolling_trend_series(sub)
+        if not trend.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=trend[X_COL],
+                    y=trend["거래금액(만원)"],
+                    mode="lines",
+                    name=f"{display_name} 추세",
+                    legendgroup=label,
+                    showlegend=False,
+                    line=dict(width=2.5, color=color),
+                    hoverinfo="skip",
+                )
+            )
+
+    tickvals, ticktext, y_lo, y_hi = _yaxis_ticks_eok(plot_df["거래금액(만원)"])
 
     fig.update_layout(
         template="plotly_white",
-        hovermode="x unified",
-        hoverdistance=80,
-        spikedistance=1000,
+        hovermode="closest",
         title=None,
         yaxis=dict(
             title=y_axis_title,
@@ -213,7 +181,7 @@ def build_price_chart(
             zeroline=False,
         ),
         legend=dict(
-            title="단지 (평형)",
+            title=dict(text="단지 (평형)"),
             orientation="h",
             yanchor="bottom",
             y=1.03,
@@ -227,16 +195,10 @@ def build_price_chart(
         paper_bgcolor="#ffffff",
     )
     fig.update_xaxes(
-        title="",
+        title=dict(text="계약일"),
         tickformat="%Y-%m",
         showgrid=True,
         gridcolor="#eef2f7",
-        showspikes=True,
-        spikemode="across",
-        spikesnap="cursor",
-        spikecolor="#64748b",
-        spikethickness=1,
-        spikedash="solid",
         rangeslider_visible=True,
         rangeslider=dict(thickness=0.08, bgcolor="#f1f5f9"),
     )
