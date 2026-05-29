@@ -63,18 +63,22 @@ _SINBANPO2_PYEONG_DISPLAY = getattr(
     {"24평형": "22평", "34평형": "35평"},
 )
 
-# UI 선택지 고정 우선순위
-_APT_PRIORITY_KEYWORDS = [
-    "잠실주공5단지",
-    "잠실주공5",
-    "삼부",
+# 사이드바·차트 범례 공통 단지 노출 순서 (표시명 기준)
+_SIDEBAR_APT_ORDER = [
     "원베일리",
+    "신반포2차",
     "퍼스티지",
     "그랑자이",
+    "잠실주공5단지",
     "리더스원",
-    "신반포2차",
-    "신반포2",
+    "삼부",
 ]
+# API/내부 명칭 → 사이드바 표시명
+_SIDEBAR_APT_ALIASES: dict[str, str] = {
+    "신반포2": "신반포2차",
+    "잠실주공5": "잠실주공5단지",
+    "주공아파트 5단지": "잠실주공5단지",
+}
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
 
 _PAGE_CSS = """
@@ -148,14 +152,30 @@ div[data-testid="stSidebar"] .stCheckbox label p {
     line-height: 1.15 !important;
 }
 div[data-testid="stSidebar"] .sidebar-apt-title {
-    margin: 0.35rem 0 0.05rem 0 !important;
+    margin-top: 1.5rem !important;
+    margin-bottom: 0.1rem !important;
     padding: 0 !important;
     font-size: 0.92rem !important;
     font-weight: 600 !important;
     line-height: 1.2 !important;
+    color: #1e293b !important;
+}
+div[data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
+    margin-top: 0.35rem !important;
 }
 div[data-testid="stSidebar"] .sidebar-apt-title p {
     margin: 0 !important;
+}
+div[data-testid="stSidebar"] .sidebar-apt-checkboxes {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+}
+div[data-testid="stSidebar"] hr.sidebar-apt-sep {
+    margin: 0.55rem 0 0.15rem 0 !important;
+    border: none !important;
+    border-top: 1px solid #e2e8f0 !important;
+    opacity: 0.9;
 }
 div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
     margin-top: 0.1rem !important;
@@ -341,14 +361,22 @@ def _eok_str(value_eok: float) -> str:
     return f"{float(value_eok):.1f}억"
 
 
-def _apt_rank(name: str) -> tuple[int, str]:
+def _canonical_sidebar_apt(name: str) -> str:
+    """사이드바 정렬용 표시명으로 통일 (API명·별칭 → 타겟 label)."""
     text = str(name).strip()
-    for idx, keyword in enumerate(_APT_PRIORITY_KEYWORDS):
-        if keyword in text:
-            # 신반포2차/신반포2를 동일 우선순위(5등)로 처리
-            fixed_idx = 4 if ("신반포2차" in keyword or "신반포2" in keyword) else idx
-            return fixed_idx, text
-    return 999, text
+    return _SIDEBAR_APT_ALIASES.get(text, text)
+
+
+def _apt_sidebar_sort_key(name: str) -> tuple[int, str]:
+    canonical = _canonical_sidebar_apt(name)
+    try:
+        return _SIDEBAR_APT_ORDER.index(canonical), str(name).strip()
+    except ValueError:
+        return len(_SIDEBAR_APT_ORDER), str(name).strip()
+
+
+def _apt_rank(name: str) -> tuple[int, str]:
+    return _apt_sidebar_sort_key(name)
 
 
 def _is_jamsil_jugong5_apt(apt_name: str | None) -> bool:
@@ -428,7 +456,7 @@ def sort_chart_labels_for_ui(labels: list[str]) -> list[str]:
 
 
 def sort_apartment_options_for_ui(apts: list[str]) -> list[str]:
-    return sorted(apts, key=lambda name: _apt_rank(name))
+    return sorted(apts, key=_apt_sidebar_sort_key)
 
 
 def _get_series_labels_from_df(df: pd.DataFrame) -> list[str]:
@@ -541,9 +569,10 @@ def _render_sidebar_series_selector(
             st.rerun()
 
     st.caption("단지별 평형")
-    for apt in apt_list:
+    for apt_idx, apt in enumerate(apt_list):
+        first_cls = " sidebar-apt-first" if apt_idx == 0 else ""
         st.markdown(
-            f'<p class="sidebar-apt-title"><strong>{apt}</strong></p>',
+            f'<p class="sidebar-apt-title{first_cls}"><strong>{apt}</strong></p>',
             unsafe_allow_html=True,
         )
         labels = apt_map[apt]
@@ -567,6 +596,8 @@ def _render_sidebar_series_selector(
                     st.session_state[cb_key] = label in selected_now
                 with py_cols[idx % 2]:
                     st.checkbox(display_pyeong, key=cb_key)
+        if apt_idx < len(apt_list) - 1:
+            st.markdown('<hr class="sidebar-apt-sep" />', unsafe_allow_html=True)
 
     selected_set: set[str] = set()
     for label in all_series:
