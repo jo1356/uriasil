@@ -130,70 +130,91 @@ div[data-testid="stSidebar"] {
     border-bottom: 4px solid #1d4ed8;
 }
 
-/* 사이드바 컴팩트 레이아웃 */
+/* 사이드바 울트라 컴팩트 + 그룹핑 */
 div[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0.2rem !important;
+    gap: 0.05rem !important;
+}
+div[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+div[data-testid="stSidebar"] [data-testid="stMarkdown"],
+div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+div[data-testid="stSidebar"] [data-testid="stElementContainer"],
+div[data-testid="stSidebar"] .stElementContainer {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
 }
 div[data-testid="stSidebar"] .stCheckbox {
-    margin-top: -0.55rem !important;
-    margin-bottom: -0.55rem !important;
+    margin-top: -0.7rem !important;
+    margin-bottom: -0.7rem !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
     min-height: 0 !important;
 }
 div[data-testid="stSidebar"] .stCheckbox > label {
-    min-height: 1.1rem !important;
-    padding-top: 0.05rem !important;
-    padding-bottom: 0.05rem !important;
+    min-height: 0.95rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin: 0 !important;
 }
 div[data-testid="stSidebar"] .stCheckbox label p {
     margin: 0 !important;
+    padding: 0 !important;
     font-size: 0.86rem !important;
-    line-height: 1.15 !important;
+    line-height: 1.1 !important;
 }
 div[data-testid="stSidebar"] .sidebar-apt-title {
-    margin-top: 1.5rem !important;
-    margin-bottom: 0.1rem !important;
+    margin-top: 1.15rem !important;
+    margin-bottom: 0 !important;
     padding: 0 !important;
     font-size: 0.92rem !important;
     font-weight: 600 !important;
-    line-height: 1.2 !important;
+    line-height: 1.15 !important;
     color: #1e293b !important;
 }
 div[data-testid="stSidebar"] .sidebar-apt-title.sidebar-apt-first {
-    margin-top: 0.35rem !important;
+    margin-top: 0.25rem !important;
 }
 div[data-testid="stSidebar"] .sidebar-apt-title p {
     margin: 0 !important;
+    padding: 0 !important;
 }
-div[data-testid="stSidebar"] .sidebar-apt-checkboxes {
+div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-apt-title) {
+    margin-bottom: -0.35rem !important;
+}
+div[data-testid="stSidebar"] .sidebar-apt-sep-wrap {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 0 !important;
+}
+div[data-testid="stSidebar"] hr,
+div[data-testid="stSidebar"] hr.sidebar-apt-sep {
+    margin: 10px 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-top: 1px solid #e0e0e0 !important;
+}
+div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(hr.sidebar-apt-sep) {
     margin-top: 0 !important;
     margin-bottom: 0 !important;
-    padding-top: 0 !important;
-}
-div[data-testid="stSidebar"] hr.sidebar-apt-sep {
-    margin: 0.55rem 0 0.15rem 0 !important;
-    border: none !important;
-    border-top: 1px solid #e2e8f0 !important;
-    opacity: 0.9;
+    padding: 0 !important;
 }
 div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
     margin-top: 0.1rem !important;
-    margin-bottom: 0.15rem !important;
+    margin-bottom: 0.1rem !important;
     padding: 0 !important;
 }
 div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
     font-size: 0.78rem !important;
     margin: 0 !important;
 }
-div[data-testid="stSidebar"] hr {
-    margin: 0.2rem 0 !important;
-    border: none !important;
-    border-top: 1px solid #e2e8f0 !important;
-    opacity: 0.85;
-}
 div[data-testid="stSidebar"] [data-testid="column"] {
-    gap: 0.15rem !important;
+    gap: 0.1rem !important;
 }
 div[data-testid="stSidebar"] .stButton button {
     padding-top: 0.25rem !important;
@@ -201,11 +222,11 @@ div[data-testid="stSidebar"] .stButton button {
     min-height: 2rem !important;
     font-size: 0.82rem !important;
 }
-div[data-testid="stSidebar"] h2, div[data-testid="stSidebar"] h3 {
+div[data-testid="stSidebar"] h2,
+div[data-testid="stSidebar"] h3 {
     margin-top: 0.35rem !important;
-    margin-bottom: 0.25rem !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
+    margin-bottom: 0.2rem !important;
+    padding: 0 !important;
     font-size: 1rem !important;
 }
 </style>
@@ -597,7 +618,10 @@ def _render_sidebar_series_selector(
                 with py_cols[idx % 2]:
                     st.checkbox(display_pyeong, key=cb_key)
         if apt_idx < len(apt_list) - 1:
-            st.markdown('<hr class="sidebar-apt-sep" />', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="sidebar-apt-sep-wrap"><hr class="sidebar-apt-sep" /></div>',
+                unsafe_allow_html=True,
+            )
 
     selected_set: set[str] = set()
     for label in all_series:
