@@ -144,6 +144,33 @@ def assign_sambu_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def is_jamsil_jugong5_apartment(dong: str, apt: str) -> bool:
+    """잠실동 주공아파트 5단지 (국토부 API 공식 명칭)."""
+    j_dong = str(getattr(config, "JAMSIL_JUGONG5_DONG", "잠실동"))
+    j_name = str(getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지"))
+    return j_dong in str(dong) and str(apt).strip() == j_name
+
+
+def get_jamsil_jugong5_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "JAMSIL_JUGONG5_AREA_RULES",
+        [("34평형", 76.0, 77.0)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_jamsil_jugong5_pyeong_group(area_m2: float) -> str | None:
+    """잠실주공5 전용: 76㎡대만 34평형, 그 외(81·82㎡ 등) 제외."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_jamsil_jugong5_area_rules():
+        if lo <= m2 < hi:
+            return label
+    return None
+
+
 def assign_pyeong_group_from_m2(
     area_m2: float,
     *,
@@ -151,12 +178,14 @@ def assign_pyeong_group_from_m2(
     apt: str = "",
 ) -> str | None:
     """
-    전용면적(㎡)으로 24/34평형 반환. 삼부는 77·92㎡대 예외 규칙 적용.
+    전용면적(㎡)으로 24/34평형 반환. 삼부·잠실주공5는 전용 예외 규칙 적용.
     - 일반 24평형: 57.0 ≤ ㎡ < 63.0
     - 일반 34평형: 82.0 ≤ ㎡ < 87.0
     """
     if is_sambu_apartment(dong, apt):
         return assign_sambu_pyeong_group(area_m2)
+    if is_jamsil_jugong5_apartment(dong, apt):
+        return assign_jamsil_jugong5_pyeong_group(area_m2)
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
@@ -174,11 +203,13 @@ def assign_pyeong_group_for_cache(
     apt: str = "",
     targets: list[TargetDict] | None = None,
 ) -> str | None:
-    """캐시 저장용 평형그룹. 삼부는 77·92㎡대만 24/34평형으로 저장."""
+    """캐시 저장용 평형그룹. 삼부·잠실주공5는 전용 ㎡ 규칙 적용."""
     if area_m2 is None or pd.isna(area_m2):
         return None
     if is_sambu_apartment(dong, apt):
         return assign_sambu_pyeong_group(area_m2)
+    if is_jamsil_jugong5_apartment(dong, apt):
+        return assign_jamsil_jugong5_pyeong_group(area_m2)
     group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
     if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
         return group
@@ -198,6 +229,11 @@ def is_allowed_area_m2(
     m2 = float(area_m2)
     if is_sambu_apartment(dong, apt):
         for label, lo, hi in get_sambu_area_rules():
+            if label == group:
+                return lo <= m2 < hi
+        return False
+    if is_jamsil_jugong5_apartment(dong, apt):
+        for label, lo, hi in get_jamsil_jugong5_area_rules():
             if label == group:
                 return lo <= m2 < hi
         return False

@@ -32,7 +32,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v18_sambu_pyeong_ui"
+_DATA_CACHE_VERSION = "v19_jamsil_jugong5_76m2"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -42,6 +42,13 @@ _SAMBU_PYEONG_DISPLAY = getattr(
     config,
     "SAMBU_PYEONG_DISPLAY",
     {"24평형": "27평", "34평형": "29평"},
+)
+_JUGONG5_LABEL = getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지")
+_JUGONG5_APT_NAME = getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지")
+_JUGONG5_PYEONG_DISPLAY = getattr(
+    config,
+    "JAMSIL_JUGONG5_PYEONG_DISPLAY",
+    {"34평형": "34평"},
 )
 
 # UI 선택지 고정 우선순위
@@ -248,16 +255,28 @@ def _apt_rank(name: str) -> tuple[int, str]:
     return 999, text
 
 
+def _is_jamsil_jugong5_apt(apt_name: str | None) -> bool:
+    if not apt_name:
+        return False
+    text = str(apt_name)
+    return _JUGONG5_LABEL in text or _JUGONG5_APT_NAME in text
+
+
 def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
-    """삼부 선택 시 UI에만 27평/29평 표시, value는 24평형/34평형 유지."""
+    """단지별 UI 평형 표기. value는 24평형/34평형 유지."""
+    if apt_name and _is_jamsil_jugong5_apt(apt_name):
+        return _JUGONG5_PYEONG_DISPLAY.get(pyeong, pyeong)
     if apt_name and _SAMBU_APT in str(apt_name):
         return _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
     return pyeong
 
 
 def _format_chart_label_display(label: str) -> str:
-    """사이드바 multiselect용 — 삼부 (24평형) → 삼부 (27평) 표시."""
+    """사이드바 multiselect용 — 단지별 평형 표기 커스텀."""
     apt, pyeong = _extract_label_parts(label)
+    if _is_jamsil_jugong5_apt(apt):
+        display_p = _JUGONG5_PYEONG_DISPLAY.get(pyeong, pyeong)
+        return f"{apt} ({display_p})"
     if _SAMBU_APT in apt:
         display_p = _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
