@@ -117,12 +117,46 @@ def calc_pyeong_from_m2(area_m2: float) -> float | None:
     return float(area_m2) * PYEONG_FROM_M2
 
 
-def assign_pyeong_group_from_m2(area_m2: float) -> str | None:
+def is_sambu_apartment(dong: str, apt: str) -> bool:
+    """여의도동 삼부 단지 여부 (국토부 API 명칭 '삼부')."""
+    sambu_dong = str(getattr(config, "SAMBU_DONG", "여의도동"))
+    sambu_name = str(getattr(config, "SAMBU_APT_NAME", "삼부"))
+    return sambu_dong in str(dong) and str(apt).strip() == sambu_name
+
+
+def get_sambu_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "SAMBU_AREA_RULES",
+        [("24평형", 77.0, 78.0), ("34평형", 92.0, 93.0)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_sambu_pyeong_group(area_m2: float) -> str | None:
+    """삼부 전용: 77㎡대→24평형, 92㎡대→34평형, 그 외 제외."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_sambu_area_rules():
+        if lo <= m2 < hi:
+            return label
+    return None
+
+
+def assign_pyeong_group_from_m2(
+    area_m2: float,
+    *,
+    dong: str = "",
+    apt: str = "",
+) -> str | None:
     """
-    전용면적(㎡)으로 24/34평형만 반환. 그 외(32평 70~74㎡ 등)는 None(삭제).
-    - 24평형: 57.0 ≤ ㎡ < 63.0
-    - 34평형: 82.0 ≤ ㎡ < 87.0
+    전용면적(㎡)으로 24/34평형 반환. 삼부는 77·92㎡대 예외 규칙 적용.
+    - 일반 24평형: 57.0 ≤ ㎡ < 63.0
+    - 일반 34평형: 82.0 ≤ ㎡ < 87.0
     """
+    if is_sambu_apartment(dong, apt):
+        return assign_sambu_pyeong_group(area_m2)
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
@@ -133,18 +167,6 @@ def assign_pyeong_group_from_m2(area_m2: float) -> str | None:
     return None
 
 
-def _row_matches_target_fields(
-    dong: str,
-    apt: str,
-    targets: list[TargetDict],
-) -> bool:
-    dong_s, apt_s = str(dong), str(apt)
-    for target in targets:
-        if target["dong"] in dong_s and target["name"] in apt_s:
-            return True
-    return False
-
-
 def assign_pyeong_group_for_cache(
     area_m2: float,
     *,
@@ -152,23 +174,33 @@ def assign_pyeong_group_for_cache(
     apt: str = "",
     targets: list[TargetDict] | None = None,
 ) -> str | None:
-    """캐시 저장용 평형그룹. 타겟 단지는 24/34 외 면적도 보존."""
+    """캐시 저장용 평형그룹. 삼부는 77·92㎡대만 24/34평형으로 저장."""
     if area_m2 is None or pd.isna(area_m2):
         return None
-    strict = assign_pyeong_group_from_m2(area_m2)
-    if strict is not None and is_allowed_area_m2(area_m2, strict):
-        return strict
-    if targets and _row_matches_target_fields(dong, apt, targets):
-        pyeong = round(float(area_m2) * PYEONG_FROM_M2)
-        return f"{pyeong}평형" if pyeong > 0 else None
+    if is_sambu_apartment(dong, apt):
+        return assign_sambu_pyeong_group(area_m2)
+    group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
+    if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
+        return group
     return None
 
 
-def is_allowed_area_m2(area_m2: float, group: str) -> bool:
+def is_allowed_area_m2(
+    area_m2: float,
+    group: str,
+    *,
+    dong: str = "",
+    apt: str = "",
+) -> bool:
     """평형그룹과 전용면적(㎡)이 규칙에 일치하는지 검증."""
     if area_m2 is None or pd.isna(area_m2) or group not in ALLOWED_PYEONG_GROUPS:
         return False
     m2 = float(area_m2)
+    if is_sambu_apartment(dong, apt):
+        for label, lo, hi in get_sambu_area_rules():
+            if label == group:
+                return lo <= m2 < hi
+        return False
     for label, lo, hi in AREA_M2_STRICT_RULES:
         if label == group:
             return lo <= m2 < hi
@@ -242,7 +274,14 @@ def add_pyeong_columns(df: pd.DataFrame) -> pd.DataFrame:
         return out.iloc[0:0].copy()
 
     out["전용면적(㎡)"] = pd.to_numeric(out["전용면적(㎡)"], errors="coerce")
-    out["평형그룹"] = out["전용면적(㎡)"].apply(assign_pyeong_group_from_m2)
+    out["평형그룹"] = out.apply(
+        lambda r: assign_pyeong_group_from_m2(
+            r["전용면적(㎡)"],
+            dong=r.get("법정동", ""),
+            apt=r.get("아파트", r.get("타겟명", "")),
+        ),
+        axis=1,
+    )
 
     # 32평(70~74㎡)·90㎡+ 등 비허용 면적 즉시 삭제
     out = out[out["평형그룹"].isin(ALLOWED_PYEONG_GROUPS)].copy()
@@ -273,7 +312,12 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         out["전용면적(㎡)"] = pd.to_numeric(out["전용면적(㎡)"], errors="coerce")
         out = out[
             out.apply(
-                lambda r: is_allowed_area_m2(r["전용면적(㎡)"], r["평형그룹"]),
+                lambda r: is_allowed_area_m2(
+                    r["전용면적(㎡)"],
+                    r["평형그룹"],
+                    dong=r.get("법정동", ""),
+                    apt=r.get("아파트", r.get("타겟명", "")),
+                ),
                 axis=1,
             )
         ].copy()

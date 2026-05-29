@@ -32,9 +32,17 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v17_jamsil_sambu"
+_DATA_CACHE_VERSION = "v18_sambu_pyeong_ui"
 
 NEAREST_TOLERANCE_DAYS = 180
+
+# 삼부 UI 표기 (내부 value는 24평형/34평형 유지)
+_SAMBU_APT = "삼부"
+_SAMBU_PYEONG_DISPLAY = getattr(
+    config,
+    "SAMBU_PYEONG_DISPLAY",
+    {"24평형": "27평", "34평형": "29평"},
+)
 
 # UI 선택지 고정 우선순위
 _APT_PRIORITY_KEYWORDS = [
@@ -240,6 +248,22 @@ def _apt_rank(name: str) -> tuple[int, str]:
     return 999, text
 
 
+def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
+    """삼부 선택 시 UI에만 27평/29평 표시, value는 24평형/34평형 유지."""
+    if apt_name and _SAMBU_APT in str(apt_name):
+        return _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
+    return pyeong
+
+
+def _format_chart_label_display(label: str) -> str:
+    """사이드바 multiselect용 — 삼부 (24평형) → 삼부 (27평) 표시."""
+    apt, pyeong = _extract_label_parts(label)
+    if _SAMBU_APT in apt:
+        display_p = _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
+        return f"{apt} ({display_p})"
+    return label
+
+
 def _extract_label_parts(label: str) -> tuple[str, str]:
     text = str(label).strip()
     if " (" in text and text.endswith(")"):
@@ -306,6 +330,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
             placeholder="기준 평형을 선택하세요",
             key="gap_base_pyeong",
             disabled=not base_apt,
+            format_func=lambda p: _format_pyeong_for_apt(base_apt, p),
         )
 
     with col2:
@@ -335,6 +360,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
             placeholder="비교 평형을 선택하세요",
             key="gap_compare_pyeong",
             disabled=not compare_apt,
+            format_func=lambda p: _format_pyeong_for_apt(compare_apt, p),
         )
 
     if not all([base_apt, base_pyeong, compare_apt, compare_pyeong]):
@@ -421,7 +447,10 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     )
     fig.update_layout(
         template="plotly_white",
-        title=f"{base_apt} ({base_pyeong}) vs {compare_apt} ({compare_pyeong}) 갭 추이",
+        title=(
+            f"{base_apt} ({_format_pyeong_for_apt(base_apt, base_pyeong)}) vs "
+            f"{compare_apt} ({_format_pyeong_for_apt(compare_apt, compare_pyeong)}) 갭 추이"
+        ),
         height=600,
         hovermode="x unified",
         margin=dict(l=48, r=24, t=72, b=88),
@@ -504,6 +533,7 @@ def _render_sidebar(
         selected_series = st.multiselect(
             "단지 + 평형 선택",
             options=chart_options,
+            format_func=_format_chart_label_display,
             help="24·34평형만 표시 · 두 탭(매매/전월세) 공통 선택",
             placeholder="단지(평형)을 선택하세요",
             key="series_select",
