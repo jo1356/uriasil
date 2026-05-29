@@ -35,7 +35,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v24_sinbanpo2_filter"
+_DATA_CACHE_VERSION = "v25_chart_display_labels"
 
 NEAREST_TOLERANCE_DAYS = 180
 
@@ -216,12 +216,14 @@ def build_chart_cached(
     _cache_version: str = _DATA_CACHE_VERSION,
 ):
     labels = list(selected_labels)
+    display_fmt = _format_chart_label_display
     if not labels:
         return build_price_chart(
             pd.DataFrame(),
             labels,
             y_axis_title=y_axis_title,
             chart_height=chart_height,
+            label_formatter=display_fmt,
         )
     aligned = prepare_chart_comparison_data(_df, labels)
     return build_price_chart(
@@ -229,6 +231,7 @@ def build_chart_cached(
         labels,
         y_axis_title=y_axis_title,
         chart_height=chart_height,
+        label_formatter=display_fmt,
     )
 
 
@@ -237,6 +240,17 @@ def _clear_data_caches() -> None:
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
     build_chart_cached.clear()
+
+
+def _reset_ui_session_if_data_version_changed() -> None:
+    """데이터/표기 버전 변경 시 사이드바 체크박스 세션 초기화."""
+    version_key = "_app_data_version"
+    if st.session_state.get(version_key) == _DATA_CACHE_VERSION:
+        return
+    for key in list(st.session_state.keys()):
+        if key.startswith("series_cb_") or key == "series_selected":
+            del st.session_state[key]
+    st.session_state[version_key] = _DATA_CACHE_VERSION
 
 
 def _format_amount_korean(manwon: object) -> str:
@@ -911,6 +925,8 @@ def main() -> None:
     st.markdown(_PAGE_CSS, unsafe_allow_html=True)
 
     st.markdown('<p class="main-header">🏢 아파트 실거래가 대시보드</p>', unsafe_allow_html=True)
+
+    _reset_ui_session_if_data_version_changed()
 
     sale_status = cache_status()
     rent_status = rent_cache_status()

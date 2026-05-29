@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Iterable
 
 import pandas as pd
@@ -64,7 +65,7 @@ def _build_hover_block_for_timeline(day_df: pd.DataFrame) -> str:
         pct = int(round(manwon / max_manwon * 100))
         contract = row.get("계약일자") or row.get("실제거래일_표시")
         lines.append(
-            _format_hover_line(str(row["차트라벨"]), manwon, contract, pct)
+            _format_hover_line(fmt(str(row["차트라벨"])), manwon, contract, pct)
         )
     return "<br>".join(lines)
 
@@ -110,6 +111,7 @@ def build_price_chart(
     selected_labels: Iterable[str],
     y_axis_title: str = "거래금액",
     chart_height: int = 600,
+    label_formatter: Callable[[str], str] | None = None,
 ) -> go.Figure:
     """
     aligned_df: prepare_chart_comparison_data() 결과
@@ -118,6 +120,7 @@ def build_price_chart(
       - 거래금액(만원): 해당 시점 비교용 가격
     """
     labels = list(selected_labels)
+    fmt = label_formatter or (lambda s: s)
     chart_df = aligned_df.copy()
 
     if chart_df.empty or X_COL not in chart_df.columns:
@@ -145,7 +148,7 @@ def build_price_chart(
                 x=sub[X_COL],
                 y=sub["거래금액(만원)"],
                 mode="lines+markers",
-                name=label,
+                name=fmt(label),
                 hoverinfo="skip",
                 line=dict(width=1.5, color=color),
                 marker=dict(size=5, color=color, line=dict(width=0.5, color="white")),
