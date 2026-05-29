@@ -36,15 +36,30 @@ def _format_contract_date_short(contract_ymd: object) -> str:
     return f"{ts.year % 100:02d}.{ts.month:02d}.{ts.day:02d}"
 
 
+def _series_color_dot_html(color: str) -> str:
+    """차트 선 색상과 동일한 원형 마커 (툴팁 HTML)."""
+    return (
+        '<span style="display:inline-block;margin-right:5px;border-radius:50%;'
+        f'width:10px;height:10px;background-color:{color};"></span>'
+    )
+
+
 def _format_hover_line(
     label: str,
     manwon: float,
     contract_ymd: object,
     pct: int,
+    *,
+    series_color: str | None = None,
 ) -> str:
+    label_with_dot = (
+        f"{_series_color_dot_html(series_color)}{label}"
+        if series_color
+        else label
+    )
     return HOVER_LINE_SEP.join(
         [
-            label,
+            label_with_dot,
             _manwon_to_eok_str(manwon),
             _format_contract_date_short(contract_ymd),
             f"{pct}%",
@@ -55,9 +70,11 @@ def _format_hover_line(
 def _build_hover_block_for_timeline(
     day_df: pd.DataFrame,
     label_formatter: Callable[[str], str] | None = None,
+    series_colors: dict[str, str] | None = None,
 ) -> str:
     """기준일(row)마다 nearest로 모인 단지들 — 고액순·최고가 대비 % 재계산."""
     fmt = label_formatter or (lambda s: s)
+    colors = series_colors or {}
     valid = day_df.dropna(subset=["거래금액(만원)"])
     if valid.empty:
         return ""
@@ -72,8 +89,15 @@ def _build_hover_block_for_timeline(
         manwon = float(row["거래금액(만원)"])
         pct = int(round(manwon / max_manwon * 100))
         contract = row.get("계약일자") or row.get("실제거래일_표시")
+        chart_label = str(row["차트라벨"])
         lines.append(
-            _format_hover_line(fmt(str(row["차트라벨"])), manwon, contract, pct)
+            _format_hover_line(
+                fmt(chart_label),
+                manwon,
+                contract,
+                pct,
+                series_color=colors.get(chart_label),
+            )
         )
     return "<br>".join(lines)
 
@@ -145,12 +169,13 @@ def build_price_chart(
 
     fig = go.Figure()
     palette = px.colors.qualitative.Plotly
+    series_colors = {label: palette[idx % len(palette)] for idx, label in enumerate(labels)}
 
     for idx, label in enumerate(labels):
         sub = plot_df.loc[plot_df["차트라벨"] == label].sort_values(LINE_X_COL)
         if sub.empty:
             continue
-        color = palette[idx % len(palette)]
+        color = series_colors[label]
         display_name = fmt(label)
         fig.add_trace(
             go.Scatter(
@@ -181,7 +206,11 @@ def build_price_chart(
     anchor_blocks: list[str] = []
 
     for ref_date, day_df in hover_source.groupby(TOOLTIP_X_COL, sort=True):
-        block = _build_hover_block_for_timeline(day_df, label_formatter=fmt)
+        block = _build_hover_block_for_timeline(
+            day_df,
+            label_formatter=fmt,
+            series_colors=series_colors,
+        )
         if not block:
             continue
         anchor_x.append(pd.Timestamp(ref_date))
