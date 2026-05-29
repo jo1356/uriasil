@@ -1014,6 +1014,7 @@ def _render_market_tab(
     y_title = "환산 전세가" if is_rent else "거래금액"
     fig = build_chart_cached(df, tuple(selected_series), y_title, chart_height)
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
+    _render_trade_table(view, is_rent=is_rent)
 
 
 def main() -> None:
