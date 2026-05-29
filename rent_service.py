@@ -20,6 +20,7 @@ from data_service import (
     _as_list,
     _region_label,
     add_pyeong_columns,
+    assign_pyeong_group_for_cache,
     assign_pyeong_group_from_m2,
     classify_row_at_ingest,
     enrich_chart_columns,
@@ -28,6 +29,7 @@ from data_service import (
     get_data_start_ymd,
     is_allowed_area_m2,
     normalize_raw_dataframe,
+    parse_targets,
     validate_service_key,
 )
 
@@ -214,14 +216,17 @@ def enforce_strict_pyeong_on_rent_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return df
     out = normalize_rent_dataframe(df)
     out = filter_new_market_rent_contracts(out)
-    out["평형그룹"] = out["전용면적(㎡)"].apply(assign_pyeong_group_from_m2)
+    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+    out["평형그룹"] = out.apply(
+        lambda r: assign_pyeong_group_for_cache(
+            r["전용면적(㎡)"],
+            dong=r["법정동"],
+            apt=r["아파트"],
+            targets=targets,
+        ),
+        axis=1,
+    )
     out = out[out["평형그룹"].notna()].copy()
-    out = out[
-        out.apply(
-            lambda r: is_allowed_area_m2(r["전용면적(㎡)"], r["평형그룹"]),
-            axis=1,
-        )
-    ].copy()
     out = out.dropna(subset=["환산보증금(만원)", "거래금액(만원)"])
     return out
 

@@ -133,6 +133,37 @@ def assign_pyeong_group_from_m2(area_m2: float) -> str | None:
     return None
 
 
+def _row_matches_target_fields(
+    dong: str,
+    apt: str,
+    targets: list[TargetDict],
+) -> bool:
+    dong_s, apt_s = str(dong), str(apt)
+    for target in targets:
+        if target["dong"] in dong_s and target["name"] in apt_s:
+            return True
+    return False
+
+
+def assign_pyeong_group_for_cache(
+    area_m2: float,
+    *,
+    dong: str = "",
+    apt: str = "",
+    targets: list[TargetDict] | None = None,
+) -> str | None:
+    """캐시 저장용 평형그룹. 타겟 단지는 24/34 외 면적도 보존."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    strict = assign_pyeong_group_from_m2(area_m2)
+    if strict is not None and is_allowed_area_m2(area_m2, strict):
+        return strict
+    if targets and _row_matches_target_fields(dong, apt, targets):
+        pyeong = round(float(area_m2) * PYEONG_FROM_M2)
+        return f"{pyeong}평형" if pyeong > 0 else None
+    return None
+
+
 def is_allowed_area_m2(area_m2: float, group: str) -> bool:
     """평형그룹과 전용면적(㎡)이 규칙에 일치하는지 검증."""
     if area_m2 is None or pd.isna(area_m2) or group not in ALLOWED_PYEONG_GROUPS:
@@ -310,11 +341,18 @@ def _parse_area_m2(value: object) -> float | None:
 def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
     """
     API 행 1건 — 전용면적(㎡)으로 평형그룹을 즉시 부여. 비허용 면적은 None(폐기).
+    config.TARGET_APARTMENTS에 해당하는 단지는 24/34 외 면적도 캐시에 보존.
     """
     m2 = _parse_area_m2(row.get("전용면적(㎡)"))
     if m2 is None:
         return None
-    group = assign_pyeong_group_from_m2(m2)
+    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+    group = assign_pyeong_group_for_cache(
+        m2,
+        dong=row.get("법정동", ""),
+        apt=row.get("아파트", ""),
+        targets=targets,
+    )
     if group is None:
         return None
     row = dict(row)
@@ -427,17 +465,17 @@ def enforce_strict_pyeong_on_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = normalize_raw_dataframe(df)
-    out["평형그룹"] = out["전용면적(㎡)"].apply(assign_pyeong_group_from_m2)
-    out = out[out["평형그룹"].isin(ALLOWED_PYEONG_GROUPS)].copy()
-    if out.empty:
-        return out
-    out = out[
-        out.apply(
-            lambda r: is_allowed_area_m2(r["전용면적(㎡)"], r["평형그룹"]),
-            axis=1,
-        )
-    ].copy()
-    return out
+    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+    out["평형그룹"] = out.apply(
+        lambda r: assign_pyeong_group_for_cache(
+            r["전용면적(㎡)"],
+            dong=r["법정동"],
+            apt=r["아파트"],
+            targets=targets,
+        ),
+        axis=1,
+    )
+    return out[out["평형그룹"].notna()].copy()
 
 
 def clear_cache_file() -> None:
