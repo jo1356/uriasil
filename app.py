@@ -167,7 +167,7 @@ div[data-testid="stSidebar"] {
 def _render_sidebar_apt_title(apt_name: str, *, is_first: bool = False) -> None:
     """사이드바 단지명 — 인라인 스타일만 사용 (글로벌 CSS 없음)."""
     safe_name = html.escape(str(apt_name))
-    margin_top = "6px" if is_first else "15px"
+    margin_top = "4px" if is_first else "5px"
     st.sidebar.markdown(
         f"<div style='margin-top: {margin_top}; margin-bottom: -5px; "
         f"font-weight: bold; font-size: 15px; color: #1e293b;'>{safe_name}</div>",
@@ -178,9 +178,15 @@ def _render_sidebar_apt_title(apt_name: str, *, is_first: bool = False) -> None:
 def _render_sidebar_apt_separator() -> None:
     """단지 그룹 구분선 — 인라인 hr."""
     st.sidebar.markdown(
-        "<hr style='margin: 10px 0px; border: none; border-top: 1px solid #e6e6e6;'>",
+        "<hr style='margin-top: 8px; margin-bottom: 8px; border: none; "
+        "border-top: 1px solid #e6e6e6;'>",
         unsafe_allow_html=True,
     )
+
+
+def _sidebar_pyeong_uses_right_column(pyeong: str) -> bool:
+    """34평형(및 UI 34·35·44평)은 col2(우측) 고정 — 24평형만 col1."""
+    return pyeong == "34평형"
 
 
 @st.cache_data(show_spinner="매매 데이터 불러오는 중...", ttl=300)
@@ -756,8 +762,9 @@ def _render_sidebar_series_selector(
             if cb_key not in st.session_state:
                 selected_now = set(st.session_state.get(selected_key, []))
                 st.session_state[cb_key] = label in selected_now
-            col1, _col2 = st.sidebar.columns(2)
-            with col1:
+            col1, col2 = st.sidebar.columns(2)
+            target_col = col2 if _sidebar_pyeong_uses_right_column(pyeong) else col1
+            with target_col:
                 st.checkbox(display_pyeong, key=cb_key)
         else:
             col1, col2 = st.sidebar.columns(2)
@@ -765,14 +772,15 @@ def _render_sidebar_series_selector(
                 labels,
                 key=lambda lb: _PYEONG_PRIORITY.get(_extract_label_parts(lb)[1], 999),
             )
-            for col, label in zip((col1, col2), sorted_labels[:2]):
+            for label in sorted_labels[:2]:
                 _, pyeong = _extract_label_parts(label)
                 display_pyeong = _format_pyeong_for_apt(apt, pyeong)
                 cb_key = _series_checkbox_key(key_prefix, label)
                 if cb_key not in st.session_state:
                     selected_now = set(st.session_state.get(selected_key, []))
                     st.session_state[cb_key] = label in selected_now
-                with col:
+                target_col = col2 if _sidebar_pyeong_uses_right_column(pyeong) else col1
+                with target_col:
                     st.checkbox(display_pyeong, key=cb_key)
         if apt_idx < len(apt_list) - 1:
             _render_sidebar_apt_separator()
