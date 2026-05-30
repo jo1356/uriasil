@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v37_outlier_p90"
+_DATA_CACHE_VERSION = "v38_gaepo_woosung"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -69,6 +69,12 @@ _SINBANPO2_PYEONG_DISPLAY = getattr(
     "SINBANPO2_PYEONG_DISPLAY",
     {"24평형": "22평", "34평형": "35평"},
 )
+_GAEPO_WOOSUNG_LABEL = getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차")
+_GAEPO_WOOSUNG_PYEONG_DISPLAY = getattr(
+    config,
+    "GAEPO_WOOSUNG_PYEONG_DISPLAY",
+    {"24평형": "31평", "34평형": "44평"},
+)
 
 # 사이드바·차트 범례 공통 단지 노출 순서 (표시명 기준)
 _SIDEBAR_APT_ORDER = [
@@ -78,6 +84,7 @@ _SIDEBAR_APT_ORDER = [
     "그랑자이",
     "잠실주공5단지",
     "리더스원",
+    "개포우성 1,2차",
     "삼부",
 ]
 # API/내부 명칭 → 사이드바 표시명
@@ -413,6 +420,16 @@ def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[s
     }
 
 
+def _labels_for_34_pyeong_master(all_series: list[str]) -> set[str]:
+    """34평형 + 개포우성 1,2차 31평(내부 24평형) 일괄 선택."""
+    picked = _labels_for_pyeong_groups(all_series, ["34평형"])
+    for lb in all_series:
+        apt, pyeong = _extract_label_parts(lb)
+        if _is_gaepo_woosung_apt(apt) and pyeong == "24평형":
+            picked.add(lb)
+    return picked
+
+
 def _format_amount_korean(manwon: object) -> str:
     if manwon is None or pd.isna(manwon):
         return "-"
@@ -462,6 +479,12 @@ def _is_sinbanpo2_apt(apt_name: str | None) -> bool:
     return _SINBANPO2_LABEL in text or text.strip() == _SINBANPO2_APT_NAME
 
 
+def _is_gaepo_woosung_apt(apt_name: str | None) -> bool:
+    if not apt_name:
+        return False
+    return _GAEPO_WOOSUNG_LABEL in str(apt_name)
+
+
 def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
     """단지별 UI 평형 표기. value는 24평형/34평형 유지."""
     if apt_name and _is_jamsil_jugong5_apt(apt_name):
@@ -470,6 +493,8 @@ def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
         return _SAMBU_PYEONG_DISPLAY.get(pyeong, pyeong)
     if apt_name and _is_sinbanpo2_apt(apt_name):
         return _SINBANPO2_PYEONG_DISPLAY.get(pyeong, pyeong)
+    if apt_name and _is_gaepo_woosung_apt(apt_name):
+        return _GAEPO_WOOSUNG_PYEONG_DISPLAY.get(pyeong, pyeong)
     return pyeong
 
 
@@ -492,6 +517,9 @@ def _format_chart_label_display(label: str) -> str:
         return f"{apt} ({display_p})"
     if _is_sinbanpo2_apt(apt):
         display_p = _SINBANPO2_PYEONG_DISPLAY.get(pyeong, pyeong)
+        return f"{apt} ({display_p})"
+    if _is_gaepo_woosung_apt(apt):
+        display_p = _GAEPO_WOOSUNG_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
     return label
 
@@ -636,7 +664,7 @@ def _render_sidebar_series_selector(
             st.rerun()
     with row2c2:
         if st.button("34평형 선택", key=f"{key_prefix}_btn_34", use_container_width=True):
-            picked = {lb for lb in all_series if _extract_label_parts(lb)[1] == "34평형"}
+            picked = _labels_for_34_pyeong_master(all_series)
             _apply_series_selection(key_prefix, all_series, picked)
             st.rerun()
 

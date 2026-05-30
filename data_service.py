@@ -194,6 +194,9 @@ def resolve_apt_for_pyeong_rules(
     sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
     if display == sb_label:
         return sb_name
+    gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
+    if display == gw_label:
+        return api_name or gw_label
     return display
 
 
@@ -228,6 +231,38 @@ def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def is_gaepo_woosung_apartment(dong: str, apt: str) -> bool:
+    """개포동 개포우성 1·2차 (API: 개포우성1, 개포우성2, 1차/2차 등)."""
+    gw_dong = str(getattr(config, "GAEPO_WOOSUNG_DONG", "개포동"))
+    if gw_dong not in str(dong):
+        return False
+    apt_s = str(apt).strip().replace(" ", "")
+    gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
+    if apt_s == gw_label.replace(" ", ""):
+        return True
+    return "개포우성" in apt_s
+
+
+def get_gaepo_woosung_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "GAEPO_WOOSUNG_AREA_RULES",
+        [("24평형", 84.0, 85.0), ("34평형", 127.0, 128.5)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
+    """개포우성 1,2차: 84~85㎡→24평형(31평 UI), 127~128.5㎡→34평형(44평 UI)."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_gaepo_woosung_area_rules():
+        if lo <= m2 <= hi:
+            return label
+    return None
+
+
 def assign_pyeong_group_from_m2(
     area_m2: float,
     *,
@@ -245,6 +280,8 @@ def assign_pyeong_group_from_m2(
         return assign_jamsil_jugong5_pyeong_group(area_m2)
     if is_sinbanpo2_apartment(dong, apt):
         return assign_sinbanpo2_pyeong_group(area_m2)
+    if is_gaepo_woosung_apartment(dong, apt):
+        return assign_gaepo_woosung_pyeong_group(area_m2)
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
@@ -271,6 +308,8 @@ def assign_pyeong_group_for_cache(
         return assign_jamsil_jugong5_pyeong_group(area_m2)
     if is_sinbanpo2_apartment(dong, apt):
         return assign_sinbanpo2_pyeong_group(area_m2)
+    if is_gaepo_woosung_apartment(dong, apt):
+        return assign_gaepo_woosung_pyeong_group(area_m2)
     group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
     if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
         return group
@@ -302,6 +341,11 @@ def is_allowed_area_m2(
         for label, lo, hi in get_sinbanpo2_area_rules():
             if label == group:
                 return lo <= m2 < hi
+        return False
+    if is_gaepo_woosung_apartment(dong, apt):
+        for label, lo, hi in get_gaepo_woosung_area_rules():
+            if label == group:
+                return lo <= m2 <= hi
         return False
     for label, lo, hi in AREA_M2_STRICT_RULES:
         if label == group:
@@ -663,6 +707,8 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
         chunk["타겟라벨"] = label
         chunk["타겟동"] = dong
         chunk["타겟명"] = display_name
+        if display_name == str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차")):
+            chunk["아파트"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()
 
