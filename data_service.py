@@ -65,8 +65,23 @@ AREA_M2_STRICT_RULES: list[tuple[str, float, float]] = [
     ("34평형", 82.0, 87.0),
 ]
 
-TargetDict = dict[str, str]
+TargetDict = dict[str, str | bool]
 ProgressCallback = Callable[[float, str], None] | None
+
+_GAEPO_WOOSUNG_APT_RE = re.compile(
+    str(getattr(config, "GAEPO_WOOSUNG_APT_REGEX", r"개포\s*우성\s*[12]|개포우성\s*[12]차?")),
+    re.IGNORECASE,
+)
+_SINHYUNDAI_APT_RE = re.compile(
+    str(getattr(config, "SINHYUNDAI_APT_REGEX", r"신현대(?:9|11|12)?|현대\s*(?:9|11|12)\s*차?")),
+    re.IGNORECASE,
+)
+
+
+def _dong_matches(dong: str, allowed: str | list[str]) -> bool:
+    d = str(dong)
+    items = [allowed] if isinstance(allowed, str) else list(allowed)
+    return any(str(item) in d for item in items if str(item).strip())
 
 
 def _as_list(value) -> list[str]:
@@ -86,10 +101,16 @@ def parse_targets(raw: object) -> list[TargetDict]:
         name = str(item.get("name", "")).strip()
         label = str(item.get("label", "")).strip() or name
         exact_name = bool(item.get("exact_name"))
+        match_all_sinhyundai = bool(item.get("match_all_sinhyundai"))
+        match_all_gaepo_woosung = bool(item.get("match_all_gaepo_woosung"))
         if dong and name:
             entry: TargetDict = {"dong": dong, "name": name, "label": label}
             if exact_name:
                 entry["exact_name"] = True
+            if match_all_sinhyundai:
+                entry["match_all_sinhyundai"] = True
+            if match_all_gaepo_woosung:
+                entry["match_all_gaepo_woosung"] = True
             targets.append(entry)
     return targets
 
@@ -235,15 +256,20 @@ def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
 
 
 def is_gaepo_woosung_apartment(dong: str, apt: str) -> bool:
-    """개포동 개포우성 1·2차 (API: 개포우성1, 개포우성2, 1차/2차 등)."""
-    gw_dong = str(getattr(config, "GAEPO_WOOSUNG_DONG", "개포동"))
-    if gw_dong not in str(dong):
+    """개포우성 1·2차 — API: 개포우성1/2, 개포 우성 1 등, 법정동 대치동·개포동."""
+    dongs = getattr(config, "GAEPO_WOOSUNG_DONGS", None)
+    if dongs is None:
+        dongs = [str(getattr(config, "GAEPO_WOOSUNG_DONG", "개포동"))]
+    if not _dong_matches(dong, dongs):
         return False
-    apt_s = str(apt).strip().replace(" ", "")
+    apt_text = str(apt).strip()
+    apt_norm = re.sub(r"\s+", "", apt_text)
     gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
-    if apt_s == gw_label.replace(" ", ""):
+    if apt_norm == gw_label.replace(" ", ""):
         return True
-    return "개포우성" in apt_s
+    if _GAEPO_WOOSUNG_APT_RE.search(apt_text):
+        return True
+    return "개포우성" in apt_norm
 
 
 def get_gaepo_woosung_area_rules() -> list[tuple[str, float, float]]:
@@ -267,22 +293,18 @@ def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
 
 
 def is_sinhyundai_apartment(dong: str, apt: str) -> bool:
-    """압구정동 신현대·현대9/11/12차(신현대9차 등 API 명칭 포함)."""
+    """압구정동 신현대·현대9/11/12차(띄어쓰기·신현대9차 등 API 명칭 포함)."""
     sh_dong = str(getattr(config, "SINHYUNDAI_DONG", "압구정동"))
     if sh_dong not in str(dong):
         return False
-    apt_s = str(apt).strip().replace(" ", "")
-    if apt_s == "신현대":
+    apt_text = str(apt).strip()
+    if apt_text == "신현대":
         return True
+    if _SINHYUNDAI_APT_RE.search(apt_text):
+        return True
+    apt_norm = re.sub(r"\s+", "", apt_text)
     for n in (9, 11, 12):
-        if apt_s in (
-            f"현대{n}차",
-            f"현대{n}",
-            f"신현대{n}차",
-            f"신현대{n}",
-        ):
-            return True
-        if apt_s.startswith(f"신현대{n}차") or apt_s.startswith(f"현대{n}차"):
+        if apt_norm.startswith(f"신현대{n}차") or apt_norm.startswith(f"현대{n}차"):
             return True
     return False
 
@@ -727,7 +749,12 @@ def clear_cache_file() -> None:
 
 
 def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
-    """타겟 단지 행 매칭 (exact_name 시 API 명칭 완전 일치)."""
+    """타겟 단지 행 매칭 (exact_name·번들 매칭·regex 유연화)."""
+    if target.get("match_all_gaepo_woosung"):
+        return df.apply(
+            lambda r: is_gaepo_woosung_apartment(r["법정동"], r["아파트"]),
+            axis=1,
+        )
     if target.get("match_all_sinhyundai"):
         return df.apply(
             lambda r: is_sinhyundai_apartment(r["법정동"], r["아파트"]),

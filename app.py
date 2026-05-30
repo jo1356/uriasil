@@ -36,7 +36,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v39_sinhyundai"
+_DATA_CACHE_VERSION = "v40_fix_target_lists"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -83,17 +83,21 @@ _SINHYUNDAI_PYEONG_DISPLAY = getattr(
 )
 
 # 사이드바·차트 범례 공통 단지 노출 순서 (표시명 기준)
-_SIDEBAR_APT_ORDER = [
-    "원베일리",
-    "신반포2차",
-    "퍼스티지",
-    "신현대",
-    "그랑자이",
-    "잠실주공5단지",
-    "리더스원",
-    "개포우성 1,2차",
-    "삼부",
-]
+_SIDEBAR_APT_ORDER = getattr(
+    config,
+    "DASHBOARD_ALLOWED_COMPLEX_LABELS",
+    [
+        "원베일리",
+        "신반포2차",
+        "퍼스티지",
+        "신현대",
+        "그랑자이",
+        "잠실주공5단지",
+        "리더스원",
+        "개포우성 1,2차",
+        "삼부",
+    ],
+)
 # API/내부 명칭 → 사이드바 표시명
 _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "신반포2": "신반포2차",
@@ -624,8 +628,29 @@ def _apply_series_selection(
     _sync_checkbox_states(key_prefix, all_series, selected)
 
 
+def _config_defined_series_labels() -> list[str]:
+    """config SIDEBAR_APT_PYEONG_OPTIONS — 데이터 없어도 사이드바 체크박스 노출."""
+    options = getattr(config, "SIDEBAR_APT_PYEONG_OPTIONS", {})
+    labels: list[str] = []
+    for apt, pyeongs in options.items():
+        for pyeong in pyeongs:
+            labels.append(f"{apt} ({pyeong})")
+    return labels
+
+
+def _merge_series_with_config(all_series: list[str]) -> list[str]:
+    """실데이터 시리즈 + config 고정 단지·평형을 합쳐 사이드바 렌더."""
+    merged: list[str] = list(all_series)
+    seen = set(merged)
+    for label in _config_defined_series_labels():
+        if label not in seen:
+            merged.append(label)
+            seen.add(label)
+    return sort_chart_labels_for_ui(merged)
+
+
 def _merge_series_labels(sale_df: pd.DataFrame, rent_df: pd.DataFrame) -> list[str]:
-    """매매·전월세 공통 사이드바 선택지 (차트라벨 합집합)."""
+    """매매·전월세 공통 사이드바 선택지 (차트라벨 합집합 + config 고정 항목)."""
     sale_labels = _get_series_labels_from_df(sale_df)
     rent_labels = _get_series_labels_from_df(rent_df)
     merged: list[str] = []
@@ -634,7 +659,7 @@ def _merge_series_labels(sale_df: pd.DataFrame, rent_df: pd.DataFrame) -> list[s
         if lb not in seen:
             seen.add(lb)
             merged.append(lb)
-    return merged
+    return _merge_series_with_config(merged)
 
 
 def _render_sidebar_series_selector(
