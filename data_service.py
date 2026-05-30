@@ -197,6 +197,9 @@ def resolve_apt_for_pyeong_rules(
     gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
     if display == gw_label:
         return api_name or gw_label
+    sh_label = str(getattr(config, "SINHYUNDAI_LABEL", "신현대"))
+    if display == sh_label:
+        return api_name or sh_label
     return display
 
 
@@ -263,6 +266,47 @@ def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def is_sinhyundai_apartment(dong: str, apt: str) -> bool:
+    """압구정동 신현대·현대9/11/12차(신현대9차 등 API 명칭 포함)."""
+    sh_dong = str(getattr(config, "SINHYUNDAI_DONG", "압구정동"))
+    if sh_dong not in str(dong):
+        return False
+    apt_s = str(apt).strip().replace(" ", "")
+    if apt_s == "신현대":
+        return True
+    for n in (9, 11, 12):
+        if apt_s in (
+            f"현대{n}차",
+            f"현대{n}",
+            f"신현대{n}차",
+            f"신현대{n}",
+        ):
+            return True
+        if apt_s.startswith(f"신현대{n}차") or apt_s.startswith(f"현대{n}차"):
+            return True
+    return False
+
+
+def get_sinhyundai_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "SINHYUNDAI_AREA_RULES",
+        [("34평형", 107.0, 109.0)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_sinhyundai_pyeong_group(area_m2: float) -> str | None:
+    """신현대: 107~109㎡→34평형(34평 UI)만."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_sinhyundai_area_rules():
+        if lo <= m2 <= hi:
+            return label
+    return None
+
+
 def assign_pyeong_group_from_m2(
     area_m2: float,
     *,
@@ -282,6 +326,8 @@ def assign_pyeong_group_from_m2(
         return assign_sinbanpo2_pyeong_group(area_m2)
     if is_gaepo_woosung_apartment(dong, apt):
         return assign_gaepo_woosung_pyeong_group(area_m2)
+    if is_sinhyundai_apartment(dong, apt):
+        return assign_sinhyundai_pyeong_group(area_m2)
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
@@ -310,6 +356,8 @@ def assign_pyeong_group_for_cache(
         return assign_sinbanpo2_pyeong_group(area_m2)
     if is_gaepo_woosung_apartment(dong, apt):
         return assign_gaepo_woosung_pyeong_group(area_m2)
+    if is_sinhyundai_apartment(dong, apt):
+        return assign_sinhyundai_pyeong_group(area_m2)
     group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
     if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
         return group
@@ -344,6 +392,11 @@ def is_allowed_area_m2(
         return False
     if is_gaepo_woosung_apartment(dong, apt):
         for label, lo, hi in get_gaepo_woosung_area_rules():
+            if label == group:
+                return lo <= m2 <= hi
+        return False
+    if is_sinhyundai_apartment(dong, apt):
+        for label, lo, hi in get_sinhyundai_area_rules():
             if label == group:
                 return lo <= m2 <= hi
         return False
@@ -675,6 +728,11 @@ def clear_cache_file() -> None:
 
 def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
     """타겟 단지 행 매칭 (exact_name 시 API 명칭 완전 일치)."""
+    if target.get("match_all_sinhyundai"):
+        return df.apply(
+            lambda r: is_sinhyundai_apartment(r["법정동"], r["아파트"]),
+            axis=1,
+        )
     dong = target["dong"]
     name = target["name"]
     dong_mask = df["법정동"].astype(str).str.contains(dong, case=False, na=False)
@@ -708,6 +766,8 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
         chunk["타겟동"] = dong
         chunk["타겟명"] = display_name
         if display_name == str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차")):
+            chunk["아파트"] = display_name
+        if display_name == str(getattr(config, "SINHYUNDAI_LABEL", "신현대")):
             chunk["아파트"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()

@@ -26,6 +26,7 @@ TARGET_APARTMENTS = [
     {"dong": "서초동", "name": "그랑자이"},
     {"dong": "잠원동", "name": "신반포2", "label": "신반포2차", "exact_name": True},  # API 명칭: 신반포2
     {"dong": "개포동", "name": "개포우성", "label": "개포우성 1,2차"},
+    {"dong": "압구정동", "name": "신현대", "label": "신현대", "match_all_sinhyundai": True},
 ]
 
 # 대시보드 기본 선택 (실제 데이터는 24·34평형만 존재)
@@ -87,4 +88,16 @@ GAEPO_WOOSUNG_AREA_RULES = [
 GAEPO_WOOSUNG_PYEONG_DISPLAY = {
     "24평형": "31평",
     "34평형": "44평",
+}
+
+# ---------------------------------------------------------------------------
+# 신현대(현대 9·11·12차) — 107~109㎡만 34평형, UI "34평"
+# ---------------------------------------------------------------------------
+SINHYUNDAI_DONG = "압구정동"
+SINHYUNDAI_LABEL = "신현대"
+SINHYUNDAI_AREA_RULES = [
+    ("34평형", 107.0, 109.0),
+]
+SINHYUNDAI_PYEONG_DISPLAY = {
+    "34평형": "34평",
 }
