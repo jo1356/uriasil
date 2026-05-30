@@ -362,8 +362,13 @@ def update_rent_cache(
         )
         save_cached_rent_data(cached)
 
+    from data_service import reprocess_rent_cache
+
+    reprocess_rent_cache(import_supplemental=True)
+    cached = load_cached_rent_data()
+
     if progress and total_tasks == 0:
-        progress(1.0, "전월세 캐시가 최신 상태입니다.")
+        progress(1.0, "전월세 캐시가 최신 상태입니다. (로컬 재처리·보충 반영 완료)")
     elif progress:
         progress(1.0, f"[전월세] 완료 - 총 {len(cached):,}건")
 

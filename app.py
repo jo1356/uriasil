@@ -19,6 +19,7 @@ from data_service import (
     cache_status,
     default_chart_selection,
     get_apartment_select_column,
+    get_data_cache_fingerprint,
     load_cached_data,
     parse_target_pyeong,
     parse_targets,
@@ -36,7 +37,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v40_fix_target_lists"
+_DATA_CACHE_VERSION = "v41_crawler_cache_fp"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -182,18 +183,29 @@ def _render_sidebar_apt_separator() -> None:
     )
 
 
-@st.cache_data(show_spinner="매매 데이터 불러오는 중...")
-def get_prepared_sale_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.DataFrame:
+@st.cache_data(show_spinner="매매 데이터 불러오는 중...", ttl=300)
+def get_prepared_sale_data(
+    _cache_version: str = _DATA_CACHE_VERSION,
+    _data_file_fp: str = "",
+) -> pd.DataFrame:
     raw = load_cached_data()
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     return add_outlier_flags(prepare_dashboard_data(raw, targets), is_rent=False)
 
 
-@st.cache_data(show_spinner="전월세 데이터 불러오는 중...")
-def get_prepared_rent_data(_cache_version: str = _DATA_CACHE_VERSION) -> pd.DataFrame:
+@st.cache_data(show_spinner="전월세 데이터 불러오는 중...", ttl=300)
+def get_prepared_rent_data(
+    _cache_version: str = _DATA_CACHE_VERSION,
+    _data_file_fp: str = "",
+) -> pd.DataFrame:
     raw = load_cached_rent_data()
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     return add_outlier_flags(prepare_rent_dashboard_data(raw, targets), is_rent=True)
+
+
+def _data_file_fingerprint() -> str:
+    """캐시 CSV 변경 시 Streamlit 메모리 캐시 자동 무효화."""
+    return get_data_cache_fingerprint(app_cache_version=_DATA_CACHE_VERSION)
 
 
 def _group_p90(series: pd.Series) -> float:
@@ -333,12 +345,17 @@ def prepare_chart_comparison_data(
     return pd.concat(parts, ignore_index=True).dropna(subset=["거래금액(만원)"])
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def get_sorted_chart_options(
     _cache_version: str = _DATA_CACHE_VERSION,
+    _data_file_fp: str = "",
     market: str = "sale",
 ) -> list[str]:
-    df = get_prepared_sale_data() if market == "sale" else get_prepared_rent_data()
+    df = (
+        get_prepared_sale_data(_cache_version, _data_file_fp)
+        if market == "sale"
+        else get_prepared_rent_data(_cache_version, _data_file_fp)
+    )
     if df.empty:
         return []
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
@@ -364,12 +381,13 @@ def prepare_raw_chart_data(
     return out.sort_values("계약일자_표시").reset_index(drop=True)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def _prepare_raw_chart_df(
     data_source: str,
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     _cache_version: str = _DATA_CACHE_VERSION,
+    _data_file_fp: str = "",
 ) -> pd.DataFrame:
     """차트용 실거래 DataFrame 캐시."""
     if not selected_labels:
@@ -377,12 +395,13 @@ def _prepare_raw_chart_df(
     return prepare_raw_chart_data(_df, list(selected_labels))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def _prepare_comparison_chart_df(
     data_source: str,
     _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     _cache_version: str = _DATA_CACHE_VERSION,
+    _data_file_fp: str = "",
 ) -> pd.DataFrame:
     """통합 툴팁용 nearest 매핑 DataFrame 캐시."""
     if not selected_labels:
@@ -552,11 +571,25 @@ def build_chart_cached(
     y_axis_title: str,
     chart_height: int,
     data_source: str,
+    *,
+    data_file_fp: str = "",
 ) -> go.Figure:
     """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
     labels = list(selected_labels)
-    raw_chart = _prepare_raw_chart_df(data_source, df, tuple(selected_labels))
-    tooltip_df = _prepare_comparison_chart_df(data_source, df, tuple(selected_labels))
+    raw_chart = _prepare_raw_chart_df(
+        data_source,
+        df,
+        tuple(selected_labels),
+        _DATA_CACHE_VERSION,
+        data_file_fp,
+    )
+    tooltip_df = _prepare_comparison_chart_df(
+        data_source,
+        df,
+        tuple(selected_labels),
+        _DATA_CACHE_VERSION,
+        data_file_fp,
+    )
     return build_price_chart(
         raw_chart,
         labels,
@@ -1164,6 +1197,7 @@ def _render_market_tab(
     chart_key: str,
     chart_height: int,
     data_source: str,
+    data_file_fp: str = "",
 ) -> None:
     if not selected_series:
         st.warning("사이드바에서 **단지·평형**을 1개 이상 선택해 주세요.")
@@ -1198,6 +1232,7 @@ def _render_market_tab(
         y_title,
         chart_height,
         data_source=data_source,
+        data_file_fp=data_file_fp,
     )
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
     _render_trade_table(view, is_rent=is_rent)
@@ -1217,10 +1252,11 @@ def main() -> None:
     _reset_ui_session_if_data_version_changed()
     _reset_ui_session_if_selection_policy_changed()
 
+    data_file_fp = _data_file_fingerprint()
     sale_status = cache_status()
     rent_status = rent_cache_status()
-    sale_df = get_prepared_sale_data()
-    rent_df = get_prepared_rent_data()
+    sale_df = get_prepared_sale_data(_DATA_CACHE_VERSION, data_file_fp)
+    rent_df = get_prepared_rent_data(_DATA_CACHE_VERSION, data_file_fp)
 
     config_pyeong = parse_target_pyeong(getattr(config, "TARGET_PYEONG", None))
     merged_series_options = _merge_series_labels(sale_df, rent_df)
@@ -1262,6 +1298,7 @@ def main() -> None:
                 chart_key="sale_price_chart",
                 chart_height=600,
                 data_source="sale",
+                data_file_fp=data_file_fp,
             )
 
     with tab_gap:
@@ -1285,6 +1322,7 @@ def main() -> None:
                 chart_key="rent_price_chart",
                 chart_height=700,
                 data_source="rent",
+                data_file_fp=data_file_fp,
             )
 
 

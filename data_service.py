@@ -27,6 +27,7 @@ API_SLEEP_SEC = 0.35
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_CSV = BASE_DIR / "all_combined_data.csv"
+CRAWL_VERSION_FILE = BASE_DIR / ".crawl_data_version"
 
 FIELD_MAP = {
     "aptNm": "아파트",
@@ -603,11 +604,230 @@ def _parse_area_m2(value: object) -> float | None:
         return None
 
 
+def row_matches_crawl_target(row: dict[str, str] | pd.Series) -> bool:
+    """국토부 API aptNm이 수집 대상(CRAWL_APARTMENT_API_NAMES·TARGET)인지."""
+    dong = str(row.get("법정동", ""))
+    apt = str(row.get("아파트", ""))
+    if (
+        is_gaepo_woosung_apartment(dong, apt)
+        or is_sinhyundai_apartment(dong, apt)
+        or is_sambu_apartment(dong, apt)
+        or is_jamsil_jugong5_apartment(dong, apt)
+        or is_sinbanpo2_apartment(dong, apt)
+    ):
+        return True
+    apt_norm = re.sub(r"\s+", "", apt.strip())
+    for name in getattr(config, "CRAWL_APARTMENT_API_NAMES", []):
+        n = re.sub(r"\s+", "", str(name))
+        if not n:
+            continue
+        if apt_norm == n or n in apt_norm or apt.strip() == str(name):
+            return True
+    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+    if not targets:
+        return False
+    mini = pd.DataFrame([dict(row)])
+    return not filter_by_targets(mini, targets).empty
+
+
+def get_data_cache_fingerprint(*, app_cache_version: str = "") -> str:
+    """캐시 CSV 수정 시각·크기 해시 — Streamlit st.cache_data 무효화용."""
+    import hashlib
+
+    from rent_service import RENT_CACHE_CSV
+
+    parts: list[str] = [
+        str(getattr(config, "CRAWL_DATA_VERSION", "")),
+        str(app_cache_version),
+    ]
+    for path in (CACHE_CSV, RENT_CACHE_CSV):
+        if path.exists():
+            stat = path.stat()
+            parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
+        else:
+            parts.append(f"{path.name}:missing")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _read_crawl_version_stamp() -> str:
+    if not CRAWL_VERSION_FILE.exists():
+        return ""
+    return CRAWL_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+
+def _write_crawl_version_stamp() -> None:
+    version = str(getattr(config, "CRAWL_DATA_VERSION", ""))
+    CRAWL_VERSION_FILE.write_text(version, encoding="utf-8")
+
+
+def crawl_version_changed() -> bool:
+    expected = str(getattr(config, "CRAWL_DATA_VERSION", ""))
+    return _read_crawl_version_stamp() != expected
+
+
+def reprocess_sale_cache() -> pd.DataFrame:
+    """기존 매매 캐시 CSV — 평형·타겟 규칙 재적용 후 저장."""
+    cached = load_cached_data()
+    if cached.empty:
+        return cached
+    out = enforce_strict_pyeong_on_dataframe(cached)
+    if not out.empty:
+        out = out.drop_duplicates(
+            subset=[
+                "조회지역코드",
+                "조회계약년월",
+                "아파트",
+                "계약일자",
+                "거래금액(만원)",
+                "전용면적(㎡)",
+                "층",
+            ],
+            keep="last",
+        )
+        save_cached_data(out)
+    return out
+
+
+def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
+    """
+    data.csv 등 보충 전월세 CSV → all_combined_rent_data.csv 병합.
+    개포우성·신현대 등 API 누락 구간 보강.
+    """
+    from rent_service import RENT_CACHE_CSV, load_cached_rent_data, save_cached_rent_data
+
+    rel = str(getattr(config, "SUPPLEMENTAL_RENT_CSV", "data.csv"))
+    path = csv_path or (BASE_DIR / rel)
+    if not path.exists():
+        return 0
+
+    raw = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    if raw.empty or "아파트" not in raw.columns:
+        return 0
+
+    area_col = "전용면적(㎡)" if "전용면적(㎡)" in raw.columns else "전용면적"
+    rows: list[dict[str, object]] = []
+    for _, r in raw.iterrows():
+        row_dict = {
+            "법정동": r.get("법정동", ""),
+            "아파트": r.get("아파트", ""),
+            "전용면적(㎡)": r.get(area_col, r.get("전용면적(㎡)")),
+        }
+        if not row_matches_crawl_target(row_dict):
+            continue
+        m2 = _parse_area_m2(row_dict.get("전용면적(㎡)"))
+        if m2 is None:
+            continue
+        group = assign_pyeong_group_for_cache(
+            m2,
+            dong=str(r.get("법정동", "")),
+            apt=str(r.get("아파트", "")),
+        )
+        if group is None:
+            continue
+        amount = _parse_amount(str(r.get("거래금액(만원)", "")))
+        if amount is None:
+            amount = _parse_amount(str(r.get("환산보증금(만원)", "")))
+        if amount is None:
+            continue
+        contract_date = str(r.get("계약일자", "")).strip()
+        deal_ym = str(r.get("조회계약년월", contract_date[:6] if len(contract_date) >= 6 else ""))
+        rows.append(
+            {
+                "아파트": str(r.get("아파트", "")),
+                "건축년도": r.get("건축년도", ""),
+                "계약기간": "",
+                "계약구분": "",
+                "계약일": str(r.get("계약일", "")),
+                "계약월": str(r.get("계약월", "")),
+                "계약년": str(r.get("계약년", "")),
+                "보증금(만원)": amount,
+                "전용면적(㎡)": m2,
+                "층": r.get("층", ""),
+                "지번": r.get("지번", ""),
+                "월세(만원)": 0.0,
+                "종전계약보증금": "",
+                "종전계약월세": "",
+                "지역코드": r.get("지역코드", r.get("조회지역코드", "11680")),
+                "법정동": r.get("법정동", ""),
+                "갱신요구권사용": "",
+                "평형그룹": group,
+                "환산보증금(만원)": amount,
+                "거래금액(만원)": amount,
+                "조회지역코드": str(r.get("조회지역코드", "11680")),
+                "조회계약년월": deal_ym,
+                "계약일자": contract_date,
+            }
+        )
+
+    if not rows:
+        return 0
+
+    supplement = enforce_strict_pyeong_on_dataframe(pd.DataFrame(rows))
+    if supplement.empty:
+        return 0
+
+    cached = load_cached_rent_data()
+    combined = (
+        pd.concat([cached, supplement], ignore_index=True)
+        if not cached.empty
+        else supplement
+    )
+    combined = combined.drop_duplicates(
+        subset=[
+            "조회지역코드",
+            "조회계약년월",
+            "아파트",
+            "계약일자",
+            "거래금액(만원)",
+            "전용면적(㎡)",
+            "층",
+        ],
+        keep="last",
+    )
+    save_cached_rent_data(combined)
+    return len(supplement)
+
+
+def reprocess_rent_cache(*, import_supplemental: bool = True) -> pd.DataFrame:
+    """기존 전월세 캐시 — 평형 재적용·(선택) 보충 CSV 병합 후 저장."""
+    from rent_service import load_cached_rent_data, save_cached_rent_data
+
+    cached = load_cached_rent_data()
+    if not cached.empty:
+        cached = enforce_strict_pyeong_on_dataframe(cached)
+        cached = cached.drop_duplicates(
+            subset=[
+                "조회지역코드",
+                "조회계약년월",
+                "아파트",
+                "계약일자",
+                "거래금액(만원)",
+                "전용면적(㎡)",
+                "층",
+            ],
+            keep="last",
+        )
+        save_cached_rent_data(cached)
+    if import_supplemental:
+        import_supplemental_rent_csv()
+    return load_cached_rent_data()
+
+
+def refresh_local_cache_files(*, import_supplemental: bool = True) -> dict[str, int]:
+    """API 없이 로컬 CSV 재처리·보충 병합 (fetch_data --reprocess)."""
+    sale = reprocess_sale_cache()
+    rent = reprocess_rent_cache(import_supplemental=import_supplemental)
+    _write_crawl_version_stamp()
+    return {"sale_rows": len(sale), "rent_rows": len(rent)}
+
+
 def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
     """
-    API 행 1건 — 전용면적(㎡)으로 평형그룹을 즉시 부여. 비허용 면적은 None(폐기).
-    config.TARGET_APARTMENTS에 해당하는 단지는 24/34 외 면적도 캐시에 보존.
+    API 행 1건 — CRAWL_APARTMENT_API_NAMES·TARGET_APARTMENTS 매칭 후 평형 부여.
+    비허용 면적·비타겟 단지는 None(폐기).
     """
+    if not row_matches_crawl_target(row):
+        return None
     m2 = _parse_area_m2(row.get("전용면적(㎡)"))
     if m2 is None:
         return None
@@ -903,8 +1123,14 @@ def update_cache(
         )
         save_cached_data(cached)
 
+    # 월 슬롯이 최신이어도 평형 규칙·보충 CSV 반영 (대시보드 '최신 캐시' 무변화 버그 방지)
+    reprocess_sale_cache()
+    reprocess_rent_cache(import_supplemental=True)
+    cached = load_cached_data()
+    _write_crawl_version_stamp()
+
     if progress and total_tasks == 0:
-        progress(1.0, "캐시가 최신 상태입니다.")
+        progress(1.0, "캐시가 최신 상태입니다. (로컬 재처리·보충 반영 완료)")
     elif progress:
         progress(1.0, f"완료 - 총 {len(cached):,}건")
 
