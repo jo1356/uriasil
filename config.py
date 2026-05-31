@@ -12,7 +12,7 @@ REGION_NAME = ["강남구", "서초구", "송파구", "영등포구"]
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v4_scraper_robust"
+CRAWL_DATA_VERSION = "v5_gaepo_44pyeong_whitelist"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
@@ -91,6 +91,16 @@ SIDEBAR_APT_PYEONG_OPTIONS = {
 # 대시보드 기본 선택 (실제 데이터는 24·34평형만 존재)
 # 24평형: 57.0~63.0㎡ | 34평형: 82.0~87.0㎡ | 그 외(32평 70~74㎡ 등) 삭제
 TARGET_PYEONG = ["24평형", "34평형"]
+
+# 국토부 API 수집 시 허용 전용면적(㎡) whitelist — classify_row_at_ingest에서 사용
+# 일반 단지: 57~63 / 82~87 | 개포우성: 84~85·127~128.5 | 신현대: 107~109
+COLLECTION_AREA_WHITELIST = [
+    {"kind": "standard", "group": "24평형", "min_m2": 57.0, "max_m2": 63.0, "inclusive_max": False},
+    {"kind": "standard", "group": "34평형", "min_m2": 82.0, "max_m2": 87.0, "inclusive_max": False},
+    {"kind": "gaepo_woosung", "group": "24평형", "min_m2": 84.0, "max_m2": 85.0, "inclusive_max": True},
+    {"kind": "gaepo_woosung", "group": "34평형", "min_m2": 127.0, "max_m2": 128.5, "inclusive_max": True},
+    {"kind": "sinhyundai", "group": "34평형", "min_m2": 107.0, "max_m2": 109.0, "inclusive_max": True},
+]
 
 # ---------------------------------------------------------------------------
 # 여의도 삼부 — 전용 평형 예외 (내부 그룹은 24/34평형, UI만 27평/29평 표기)

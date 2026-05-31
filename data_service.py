@@ -180,6 +180,70 @@ def all_pyeong_labels() -> list[str]:
     return ALLOWED_PYEONG_GROUPS.copy()
 
 
+def _area_in_range(m2: float, lo: float, hi: float, *, inclusive_max: bool) -> bool:
+    if inclusive_max:
+        return lo <= m2 <= hi
+    return lo <= m2 < hi
+
+
+def is_area_in_collection_whitelist(
+    area_m2: float,
+    *,
+    dong: str = "",
+    apt: str = "",
+) -> bool:
+    """수집 단계 면적 whitelist — 일반 59/84㎡ + 개포우성 127㎡ + 신현대 107㎡."""
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
+        return False
+    dong_s = _safe_str(dong)
+    apt_s = _safe_str(apt)
+
+    if is_gaepo_woosung_apartment(dong_s, apt_s):
+        return assign_gaepo_woosung_pyeong_group(m2) is not None
+    if is_sinhyundai_apartment(dong_s, apt_s):
+        return assign_sinhyundai_pyeong_group(m2) is not None
+    if is_sambu_apartment(dong_s, apt_s):
+        return assign_sambu_pyeong_group(m2) is not None
+    if is_jamsil_jugong5_apartment(dong_s, apt_s):
+        return assign_jamsil_jugong5_pyeong_group(m2) is not None
+    if is_sinbanpo2_apartment(dong_s, apt_s):
+        return assign_sinbanpo2_pyeong_group(m2) is not None
+
+    for rule in getattr(config, "COLLECTION_AREA_WHITELIST", []):
+        if rule.get("kind") != "standard":
+            continue
+        lo = float(rule["min_m2"])
+        hi = float(rule["max_m2"])
+        if _area_in_range(m2, lo, hi, inclusive_max=bool(rule.get("inclusive_max"))):
+            return True
+    return False
+
+
+def display_pyeong_for_apartment(apt_name: str, pyeong_group: str) -> str:
+    """UI 표시용 평형 — 평형그룹(24/34평형)은 그대로 두고 표시명만 반환."""
+    apt = str(apt_name or "").strip()
+    pg = str(pyeong_group or "").strip()
+    gw = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
+    if gw in apt:
+        return str(getattr(config, "GAEPO_WOOSUNG_PYEONG_DISPLAY", {}).get(pg, pg))
+    sh = str(getattr(config, "SINHYUNDAI_LABEL", "신현대"))
+    if sh in apt:
+        return str(getattr(config, "SINHYUNDAI_PYEONG_DISPLAY", {}).get(pg, pg))
+    sb2 = str(getattr(config, "SINBANPO2_LABEL", "신반포2차"))
+    sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
+    if sb2 in apt or apt == sb_name:
+        return str(getattr(config, "SINBANPO2_PYEONG_DISPLAY", {}).get(pg, pg))
+    j5 = str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지"))
+    j5_name = str(getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지"))
+    if j5 in apt or j5_name in apt:
+        return str(getattr(config, "JAMSIL_JUGONG5_PYEONG_DISPLAY", {}).get(pg, pg))
+    sambu = str(getattr(config, "SAMBU_APT_NAME", "삼부"))
+    if sambu in apt:
+        return str(getattr(config, "SAMBU_PYEONG_DISPLAY", {}).get(pg, pg))
+    return pg
+
+
 def calc_pyeong_from_m2(area_m2: float) -> float | None:
     """전용면적(㎡) → 평 (×0.3025)"""
     if pd.isna(area_m2) or area_m2 <= 0:
@@ -625,6 +689,10 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         format_chart_label(str(n).strip(), str(p))
         for n, p in zip(display, out["평형그룹"])
     ]
+    out["평형"] = [
+        display_pyeong_for_apartment(str(n).strip(), str(p))
+        for n, p in zip(display, out["평형그룹"])
+    ]
 
     # 24평형·34평형 라벨만 허용 (32평형 등 문자열 완전 차단)
     out = out[
@@ -810,6 +878,12 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
             m2 = _parse_area_m2(row_dict.get("전용면적(㎡)"))
             if m2 is None:
                 continue
+            if not is_area_in_collection_whitelist(
+                m2,
+                dong=row_dict["법정동"],
+                apt=row_dict["아파트"],
+            ):
+                continue
             group = assign_pyeong_group_for_cache(
                 m2,
                 dong=row_dict["법정동"],
@@ -930,11 +1004,15 @@ def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
         m2 = _parse_area_m2(row.get("전용면적(㎡)"))
         if m2 is None:
             return None
+        dong = _safe_str(row.get("법정동", ""))
+        apt = _safe_str(row.get("아파트", ""))
+        if not is_area_in_collection_whitelist(m2, dong=dong, apt=apt):
+            return None
         targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
         group = assign_pyeong_group_for_cache(
             m2,
-            dong=_safe_str(row.get("법정동", "")),
-            apt=_safe_str(row.get("아파트", "")),
+            dong=dong,
+            apt=apt,
             targets=targets,
         )
         if group is None:
@@ -951,6 +1029,7 @@ def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
 # 캐시에 남아 있을 수 있는 파생 컬럼 — 항상 전용면적(㎡)에서 재계산
 _DERIVED_DASHBOARD_COLUMNS = (
     "평형그룹",
+    "평형",
     "차트라벨",
     "전용평수",
     "전용면적(평)",
@@ -1182,6 +1261,9 @@ def update_cache(
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
     all_months = generate_month_range(get_data_start_ymd())
+
+    if crawl_version_changed() and not force_rebuild:
+        force_rebuild = True
 
     if force_rebuild:
         clear_cache_file()

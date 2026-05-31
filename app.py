@@ -37,7 +37,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v41_crawler_cache_fp"
+_DATA_CACHE_VERSION = "v42_gaepo_44pyeong_display"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -471,12 +471,16 @@ def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[s
     }
 
 
+_MASTER_LARGE_PYEONG_DISPLAYS = frozenset({"31평", "34평", "44평", "35평"})
+
+
 def _labels_for_34_pyeong_master(all_series: list[str]) -> set[str]:
-    """34평형 + 개포우성 1,2차 31평(내부 24평형) 일괄 선택."""
-    picked = _labels_for_pyeong_groups(all_series, ["34평형"])
+    """UI 표시 평형(31·34·44·35평) 체크박스만 True — 데이터 평형그룹은 변경하지 않음."""
+    picked: set[str] = set()
     for lb in all_series:
         apt, pyeong = _extract_label_parts(lb)
-        if _is_gaepo_woosung_apt(apt) and pyeong == "24평형":
+        display = _format_pyeong_for_apt(apt, pyeong)
+        if display in _MASTER_LARGE_PYEONG_DISPLAYS:
             picked.add(lb)
     return picked
 
@@ -1180,12 +1184,13 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
     title = "📋 거래 내역"
     with st.expander(title, expanded=False):
         if is_rent:
+            pyeong_cols = ["평형"] if "평형" in view.columns else (["평형그룹"] if "평형그룹" in view.columns else [])
             display_cols = [
                 c
                 for c in [
                     "계약일자",
                     "아파트",
-                    "평형그룹",
+                    *pyeong_cols,
                     "전용면적(㎡)",
                     "보증금(만원)",
                     "월세(만원)",
@@ -1195,12 +1200,13 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
                 if c in view.columns
             ]
         else:
+            pyeong_cols = ["평형"] if "평형" in view.columns else (["평형그룹"] if "평형그룹" in view.columns else [])
             display_cols = [
                 c
                 for c in [
                     "계약일자",
                     "아파트",
-                    "평형그룹",
+                    *pyeong_cols,
                     "전용면적(㎡)",
                     "거래금액(만원)",
                     "층",
@@ -1209,17 +1215,20 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
             ]
 
         display_df = view[display_cols].copy()
-        if "평형그룹" in display_df.columns:
+        if "평형" in display_df.columns:
+            display_df = display_df.drop(columns=["평형그룹"], errors="ignore")
+        elif "평형그룹" in display_df.columns:
             apt_name_col = (
                 "타겟명"
                 if "타겟명" in view.columns
                 else ("아파트" if "아파트" in view.columns else None)
             )
             if apt_name_col:
-                display_df["평형그룹"] = [
+                display_df["평형"] = [
                     _format_pyeong_for_apt(row.get(apt_name_col), str(row["평형그룹"]))
                     for _, row in view.iterrows()
                 ]
+            display_df = display_df.drop(columns=["평형그룹"], errors="ignore")
         if is_rent:
             if "보증금(만원)" in display_df.columns:
                 display_df["보증금"] = display_df["보증금(만원)"].apply(_format_amount_korean)

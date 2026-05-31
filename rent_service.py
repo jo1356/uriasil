@@ -292,9 +292,14 @@ def update_rent_cache(
     progress: ProgressCallback = None,
     force_rebuild: bool = False,
 ) -> pd.DataFrame:
+    from data_service import crawl_version_changed
+
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
     all_months = generate_month_range(get_data_start_ymd())
+
+    if crawl_version_changed() and not force_rebuild:
+        force_rebuild = True
 
     if force_rebuild:
         clear_rent_cache_file()
