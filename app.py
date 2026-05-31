@@ -707,6 +707,67 @@ def sort_apartment_options_for_ui(apts: list[str]) -> list[str]:
     return ordered
 
 
+def _gap_analysis_apt_options(sale_df: pd.DataFrame) -> list[str]:
+    """갭 분석 — 실데이터 단지 + 대시보드 고정 단지(신현대·개포우성 등) 병합."""
+    apt_col = get_apartment_select_column(sale_df)
+    from_data: list[str] = []
+    if not sale_df.empty and apt_col in sale_df.columns:
+        from_data = sale_df[apt_col].dropna().astype(str).unique().tolist()
+    dashboard = list(
+        getattr(config, "DASHBOARD_ALLOWED_COMPLEX_LABELS", _SIDEBAR_APT_ORDER)
+    )
+    combined: list[str] = list(from_data)
+    seen = set(combined)
+    for apt in dashboard:
+        if apt not in seen:
+            combined.append(apt)
+            seen.add(apt)
+    return sort_apartment_options_for_ui(combined)
+
+
+def _mask_gap_apt_rows(df: pd.DataFrame, apt_col: str, apt_name: str) -> pd.Series:
+    """갭 분석 — 표시명·타겟명·차트라벨 기준 단지 행 매칭."""
+    if df.empty:
+        return pd.Series(False, index=df.index)
+    apt_s = df[apt_col].fillna("").astype(str)
+    canonical = _canonical_sidebar_apt(apt_name)
+    mask = (apt_s == str(apt_name)) | (apt_s.map(_canonical_sidebar_apt) == canonical)
+    if "차트라벨" in df.columns:
+        prefix = f"{apt_name} ("
+        mask = mask | df["차트라벨"].astype(str).str.startswith(prefix)
+    return mask
+
+
+def _gap_pyeong_options_for_apt(
+    sale_df: pd.DataFrame,
+    apt_col: str,
+    apt_name: str | None,
+) -> list[str]:
+    """갭 분석 평형 선택지 — 실데이터 + config 단일 평형 단지 fallback."""
+    if not apt_name:
+        return []
+    pyeongs: list[str] = []
+    if not sale_df.empty and "평형그룹" in sale_df.columns:
+        pyeongs = (
+            sale_df.loc[_mask_gap_apt_rows(sale_df, apt_col, apt_name), "평형그룹"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+    config_opts = getattr(config, "SIDEBAR_APT_PYEONG_OPTIONS", {}).get(str(apt_name), [])
+    extras: list[str] = []
+    if _is_jamsil_jugong5_apt(apt_name) or _is_sinhyundai_apt(apt_name):
+        extras = ["34평형"]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for p in pyeongs + list(config_opts) + extras:
+        if p and p not in seen:
+            seen.add(p)
+            merged.append(p)
+    return sorted(merged, key=lambda p: _PYEONG_PRIORITY.get(p, 999))
+
+
 def _get_series_labels_from_df(df: pd.DataFrame) -> list[str]:
     """준비된 DataFrame에서 차트 시리즈(차트라벨) 목록 생성."""
     if df.empty or "차트라벨" not in df.columns:
@@ -896,9 +957,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         return
 
     apt_col = get_apartment_select_column(sale_df)
-    apt_options = sort_apartment_options_for_ui(
-        sale_df[apt_col].dropna().astype(str).unique().tolist()
-    )
+    apt_options = _gap_analysis_apt_options(sale_df)
     if not apt_options:
         st.info("매매 아파트 목록이 비어 있습니다.")
         return
@@ -912,18 +971,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
             placeholder="기준 아파트를 선택하세요",
             key="gap_base_apt",
         )
-        base_pyeong_options = (
-            sorted(
-                sale_df.loc[sale_df[apt_col] == base_apt, "평형그룹"]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist(),
-                key=lambda p: _PYEONG_PRIORITY.get(p, 999),
-            )
-            if base_apt
-            else []
-        )
+        base_pyeong_options = _gap_pyeong_options_for_apt(sale_df, apt_col, base_apt)
         base_pyeong = st.selectbox(
             "기준 평형",
             options=base_pyeong_options,
@@ -942,18 +990,7 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
             placeholder="비교 아파트를 선택하세요",
             key="gap_compare_apt",
         )
-        compare_pyeong_options = (
-            sorted(
-                sale_df.loc[sale_df[apt_col] == compare_apt, "평형그룹"]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist(),
-                key=lambda p: _PYEONG_PRIORITY.get(p, 999),
-            )
-            if compare_apt
-            else []
-        )
+        compare_pyeong_options = _gap_pyeong_options_for_apt(sale_df, apt_col, compare_apt)
         compare_pyeong = st.selectbox(
             "비교 평형",
             options=compare_pyeong_options,
@@ -968,11 +1005,13 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         st.info("좌/우의 아파트와 평형을 모두 선택하면 갭 분석 차트가 표시됩니다.")
         return
 
+    apt_mask_base = _mask_gap_apt_rows(sale_df, apt_col, base_apt)
+    apt_mask_compare = _mask_gap_apt_rows(sale_df, apt_col, compare_apt)
     base_df = sale_df[
-        (sale_df[apt_col] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
+        apt_mask_base & (sale_df["평형그룹"] == base_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
     compare_df = sale_df[
-        (sale_df[apt_col] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
+        apt_mask_compare & (sale_df["평형그룹"] == compare_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
 
     if base_df.empty or compare_df.empty:
@@ -1066,11 +1105,9 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True, key="sale_gap_chart")
 
     # 차트 아래: 기준/비교 거래 내역 좌우 분할
-    base_table_df = sale_df[
-        (sale_df[apt_col] == base_apt) & (sale_df["평형그룹"] == base_pyeong)
-    ].copy()
+    base_table_df = sale_df[apt_mask_base & (sale_df["평형그룹"] == base_pyeong)].copy()
     compare_table_df = sale_df[
-        (sale_df[apt_col] == compare_apt) & (sale_df["평형그룹"] == compare_pyeong)
+        apt_mask_compare & (sale_df["평형그룹"] == compare_pyeong)
     ].copy()
 
     table_cols = [
