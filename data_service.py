@@ -59,6 +59,19 @@ FIELD_MAP = {
 # 허용 평형 (그 외 32·43·49평 등은 모두 제외)
 ALLOWED_PYEONG_GROUPS = ["24평형", "34평형"]
 
+# UI 평형 문자열 ↔ 내부 평형그룹
+PYEONG_STRING_TO_GROUP: dict[str, str] = {
+    "24평": "24평형",
+    "34평": "34평형",
+    "31평": "24평형",
+    "44평": "34평형",
+    "27평": "24평형",
+    "29평": "34평형",
+    "22평": "24평형",
+    "35평": "34평형",
+}
+ALLOWED_DISPLAY_PYEONG = frozenset(PYEONG_STRING_TO_GROUP.keys())
+
 # 초정밀 전용면적(㎡) 구간 — [min, max) 만 허용, 그 외 전부 삭제
 # 24평형: 59㎡ 내외 | 34평형: 84㎡ 내외 (32평 70~74㎡ 등 완전 차단)
 AREA_M2_STRICT_RULES: list[tuple[str, float, float]] = [
@@ -391,13 +404,13 @@ def get_gaepo_woosung_area_rules() -> list[tuple[str, float, float]]:
     raw = getattr(
         config,
         "GAEPO_WOOSUNG_AREA_RULES",
-        [("24평형", 84.0, 85.0), ("34평형", 127.0, 128.5)],
+        [("24평형", 84.0, 85.0), ("34평형", 127.0, 129.0)],
     )
     return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
 
 
 def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
-    """개포우성 1,2차: 84~85㎡→24평형(31평 UI), 127~128.5㎡→34평형(44평 UI)."""
+    """개포우성 1,2차: 84~85㎡→24평형(31평 UI), 127~129㎡→34평형(44평 UI)."""
     m2 = _parse_area_m2(area_m2)
     if m2 is None:
         return None
@@ -450,6 +463,56 @@ def assign_sinhyundai_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def area_m2_to_pyeong_string(
+    area_m2: float,
+    *,
+    dong: str = "",
+    apt: str = "",
+) -> str | None:
+    """
+    전용면적(㎡) → UI 평형 문자열 ('24평', '34평', '44평' 등).
+    개포우성 127~129㎡ → '44평', 신현대 107~109㎡ → '34평' 명시 매핑.
+    """
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
+        return None
+    dong_s = _safe_str(dong)
+    apt_s = _safe_str(apt)
+    display_apt = apt_s or dong_s
+
+    if is_gaepo_woosung_apartment(dong_s, apt_s):
+        if 84.0 <= m2 <= 85.0:
+            return "31평"
+        if 127.0 <= m2 <= 129.0:
+            return "44평"
+        return None
+
+    if is_sinhyundai_apartment(dong_s, apt_s):
+        if 107.0 <= m2 <= 109.0:
+            return "34평"
+        return None
+
+    if is_sambu_apartment(dong_s, apt_s):
+        group = assign_sambu_pyeong_group(m2)
+        return display_pyeong_for_apartment(display_apt, group) if group else None
+    if is_jamsil_jugong5_apartment(dong_s, apt_s):
+        group = assign_jamsil_jugong5_pyeong_group(m2)
+        return display_pyeong_for_apartment(display_apt, group) if group else None
+    if is_sinbanpo2_apartment(dong_s, apt_s):
+        group = assign_sinbanpo2_pyeong_group(m2)
+        return display_pyeong_for_apartment(display_apt, group) if group else None
+
+    if 57.0 <= m2 < 63.0:
+        return "24평"
+    if 82.0 <= m2 < 87.0:
+        return "34평"
+    return None
+
+
+def pyeong_string_to_group(display_pyeong: str) -> str | None:
+    return PYEONG_STRING_TO_GROUP.get(str(display_pyeong or "").strip())
+
+
 def assign_pyeong_group_from_m2(
     area_m2: float,
     *,
@@ -488,25 +551,20 @@ def assign_pyeong_group_for_cache(
     apt: str = "",
     targets: list[TargetDict] | None = None,
 ) -> str | None:
-    """캐시 저장용 평형그룹. 삼부·잠실주공5·신반포2차는 전용 ㎡ 규칙 적용."""
+    """캐시 저장용 평형그룹 — area_m2_to_pyeong_string() 기반."""
     try:
         m2 = _parse_area_m2(area_m2)
         if m2 is None:
             return None
         dong_s = _safe_str(dong)
         apt_s = _safe_str(apt)
-        if is_sambu_apartment(dong_s, apt_s):
-            return assign_sambu_pyeong_group(m2)
-        if is_jamsil_jugong5_apartment(dong_s, apt_s):
-            return assign_jamsil_jugong5_pyeong_group(m2)
-        if is_sinbanpo2_apartment(dong_s, apt_s):
-            return assign_sinbanpo2_pyeong_group(m2)
-        if is_gaepo_woosung_apartment(dong_s, apt_s):
-            return assign_gaepo_woosung_pyeong_group(m2)
-        if is_sinhyundai_apartment(dong_s, apt_s):
-            return assign_sinhyundai_pyeong_group(m2)
-        group = assign_pyeong_group_from_m2(m2, dong=dong_s, apt=apt_s)
-        if group is not None and is_allowed_area_m2(m2, group, dong=dong_s, apt=apt_s):
+        display = area_m2_to_pyeong_string(m2, dong=dong_s, apt=apt_s)
+        if display is None:
+            return None
+        group = pyeong_string_to_group(display)
+        if group is None:
+            return None
+        if is_allowed_area_m2(m2, group, dong=dong_s, apt=apt_s):
             return group
         return None
     except Exception as exc:
@@ -616,11 +674,13 @@ def format_chart_label(apt_name: str, pyeong_group: str) -> str:
 
 def _safe_assign_pyeong_from_m2_row(row: pd.Series) -> str | None:
     try:
-        return assign_pyeong_group_from_m2(
+        apt = resolve_apt_for_pyeong_rules(row)
+        display = area_m2_to_pyeong_string(
             _parse_area_m2(row.get("전용면적(㎡)")),
             dong=_safe_str(row.get("법정동", "")),
-            apt=resolve_apt_for_pyeong_rules(row),
+            apt=apt,
         )
+        return pyeong_string_to_group(display) if display else None
     except Exception as exc:
         _log_row_parse_error("add_pyeong", exc)
         return None
@@ -653,8 +713,20 @@ def add_pyeong_columns(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    # 32평(70~74㎡)·90㎡+ 등 비허용 면적 즉시 삭제
-    out = out[out["평형그룹"].isin(ALLOWED_PYEONG_GROUPS)].copy()
+    out["평형"] = out.apply(
+        lambda r: area_m2_to_pyeong_string(
+            r.get("전용면적(㎡)"),
+            dong=_safe_str(r.get("법정동", "")),
+            apt=resolve_apt_for_pyeong_rules(r),
+        ),
+        axis=1,
+    )
+
+    # 32평(70~74㎡)·90㎡+ 등 비허용 면적 즉시 삭제 — 44평·31평은 유지
+    out = out[
+        out["평형그룹"].isin(ALLOWED_PYEONG_GROUPS)
+        & out["평형"].isin(ALLOWED_DISPLAY_PYEONG)
+    ].copy()
     if out.empty:
         return out
 
@@ -676,7 +748,7 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out["평형그룹"] = out["평형그룹"].where(
         out["평형그룹"].isin(ALLOWED_PYEONG_GROUPS), None
     )
-    out = out.dropna(subset=["평형그룹"])
+    out = out.dropna(subset=["평형그룹", "평형"])
 
     if "전용면적(㎡)" in out.columns:
         out["전용면적(㎡)"] = pd.to_numeric(out["전용면적(㎡)"], errors="coerce")
@@ -689,10 +761,16 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         format_chart_label(str(n).strip(), str(p))
         for n, p in zip(display, out["평형그룹"])
     ]
-    out["평형"] = [
-        display_pyeong_for_apartment(str(n).strip(), str(p))
-        for n, p in zip(display, out["평형그룹"])
-    ]
+    # 면적 기반 평형 문자열 우선 (127㎡→44평, 107㎡→34평)
+    out["평형"] = out.apply(
+        lambda r: area_m2_to_pyeong_string(
+            r.get("전용면적(㎡)"),
+            dong=_safe_str(r.get("법정동", "")),
+            apt=str(r.get("타겟명", r.get("아파트", ""))).strip(),
+        ),
+        axis=1,
+    )
+    out = out[out["평형"].isin(ALLOWED_DISPLAY_PYEONG)].copy()
 
     # 24평형·34평형 라벨만 허용 (32평형 등 문자열 완전 차단)
     out = out[

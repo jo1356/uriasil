@@ -37,7 +37,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v42_gaepo_44pyeong_display"
+_DATA_CACHE_VERSION = "v43_area_pyeong_44_mapping"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 

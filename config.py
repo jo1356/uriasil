@@ -12,7 +12,7 @@ REGION_NAME = ["강남구", "서초구", "송파구", "영등포구"]
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v5_gaepo_44pyeong_whitelist"
+CRAWL_DATA_VERSION = "v6_area_pyeong_44_mapping"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
@@ -93,12 +93,12 @@ SIDEBAR_APT_PYEONG_OPTIONS = {
 TARGET_PYEONG = ["24평형", "34평형"]
 
 # 국토부 API 수집 시 허용 전용면적(㎡) whitelist — classify_row_at_ingest에서 사용
-# 일반 단지: 57~63 / 82~87 | 개포우성: 84~85·127~128.5 | 신현대: 107~109
+# 일반 단지: 57~63 / 82~87 | 개포우성: 84~85·127~129 | 신현대: 107~109
 COLLECTION_AREA_WHITELIST = [
     {"kind": "standard", "group": "24평형", "min_m2": 57.0, "max_m2": 63.0, "inclusive_max": False},
     {"kind": "standard", "group": "34평형", "min_m2": 82.0, "max_m2": 87.0, "inclusive_max": False},
     {"kind": "gaepo_woosung", "group": "24평형", "min_m2": 84.0, "max_m2": 85.0, "inclusive_max": True},
-    {"kind": "gaepo_woosung", "group": "34평형", "min_m2": 127.0, "max_m2": 128.5, "inclusive_max": True},
+    {"kind": "gaepo_woosung", "group": "34평형", "min_m2": 127.0, "max_m2": 129.0, "inclusive_max": True},
     {"kind": "sinhyundai", "group": "34평형", "min_m2": 107.0, "max_m2": 109.0, "inclusive_max": True},
 ]
 
@@ -145,7 +145,7 @@ SINBANPO2_PYEONG_DISPLAY = {
 }
 
 # ---------------------------------------------------------------------------
-# 개포우성 1,2차 — 84~85㎡(31평)·127~128.5㎡(44평), UI 31평/44평
+# 개포우성 1,2차 — 84~85㎡(31평)·127~129㎡(44평), UI 31평/44평
 # 31평(내부 24평형)·44평(내부 34평형) 모두 34평형 일괄 선택에 포함
 # ---------------------------------------------------------------------------
 GAEPO_WOOSUNG_DONG = "개포동"
@@ -156,7 +156,7 @@ GAEPO_WOOSUNG_LABEL = "개포우성 1,2차"
 GAEPO_WOOSUNG_APT_REGEX = r"개포\s*우성\s*[12]|개포우성\s*[12]차?"
 GAEPO_WOOSUNG_AREA_RULES = [
     ("24평형", 84.0, 85.0),    # 31평 UI
-    ("34평형", 127.0, 128.5),  # 44평 UI
+    ("34평형", 127.0, 129.0),  # 44평 UI
 ]
 GAEPO_WOOSUNG_PYEONG_DISPLAY = {
     "24평형": "31평",
