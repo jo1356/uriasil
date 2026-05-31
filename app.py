@@ -1242,6 +1242,27 @@ def _render_metrics(view: pd.DataFrame, series_count: int) -> None:
         m4.metric("최근 거래", "-")
 
 
+def _sort_trade_table_by_latest_contract(view: pd.DataFrame) -> pd.DataFrame:
+    """거래 내역 표 — 계약일자 기준 최신순."""
+    if view.empty:
+        return view
+    out = view.copy()
+    if "계약일자" in out.columns:
+        sort_key = pd.to_numeric(
+            out["계약일자"].astype(str).str.replace(r"\D", "", regex=True),
+            errors="coerce",
+        )
+    elif "계약일자_표시" in out.columns:
+        sort_key = pd.to_datetime(out["계약일자_표시"], errors="coerce")
+    else:
+        return out
+    return (
+        out.assign(_sort_key=sort_key)
+        .sort_values("_sort_key", ascending=False, na_position="last")
+        .drop(columns=["_sort_key"])
+    )
+
+
 def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
     title = "📋 거래 내역"
     with st.expander(title, expanded=False):
@@ -1276,19 +1297,20 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
                 if c in view.columns
             ]
 
-        display_df = view[display_cols].copy()
+        sort_view = _sort_trade_table_by_latest_contract(view)
+        display_df = sort_view[display_cols].copy()
         if "평형" in display_df.columns:
             display_df = display_df.drop(columns=["평형그룹"], errors="ignore")
         elif "평형그룹" in display_df.columns:
             apt_name_col = (
                 "타겟명"
-                if "타겟명" in view.columns
-                else ("아파트" if "아파트" in view.columns else None)
+                if "타겟명" in sort_view.columns
+                else ("아파트" if "아파트" in sort_view.columns else None)
             )
             if apt_name_col:
                 display_df["평형"] = [
                     _format_pyeong_for_apt(row.get(apt_name_col), str(row["평형그룹"]))
-                    for _, row in view.iterrows()
+                    for _, row in sort_view.iterrows()
                 ]
             display_df = display_df.drop(columns=["평형그룹"], errors="ignore")
         if is_rent:
@@ -1309,46 +1331,10 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
             display_df["거래금액"] = display_df["거래금액(만원)"].apply(_format_amount_korean)
             display_df = display_df.drop(columns=["거래금액(만원)"])
 
-        apt_name_col = (
-            "타겟명"
-            if "타겟명" in view.columns
-            else ("아파트" if "아파트" in view.columns else None)
-        )
-        sort_view = view.copy()
-        if apt_name_col:
-            sort_view["아파트명"] = (
-                sort_view[apt_name_col].astype(str).map(_canonical_sidebar_apt)
-            )
-        elif "차트라벨" in sort_view.columns:
-            sort_view["아파트명"] = [
-                _extract_label_parts(str(lb))[0] for lb in sort_view["차트라벨"]
-            ]
-        if "아파트명" not in sort_view.columns:
-            sorted_df = display_df.sort_values("계약일자", ascending=False)
-        else:
-            label_order = (
-                _ordered_chart_labels(sort_view["차트라벨"].astype(str).unique().tolist())
-                if "차트라벨" in sort_view.columns
-                else None
-            )
-            sort_view = _apply_apt_display_categorical(
-                sort_view,
-                apt_col="아파트명",
-                label_col="차트라벨" if "차트라벨" in sort_view.columns else None,
-                label_order=label_order,
-            )
-            sort_cols = ["아파트명"]
-            if "차트라벨" in sort_view.columns:
-                sort_cols.append("차트라벨")
-            sort_cols.append("계약일자")
-            sorted_view = sort_view.sort_values(
-                sort_cols,
-                ascending=[True] * (len(sort_cols) - 1) + [False],
-            )
-            sorted_df = display_df.loc[sorted_view.index]
+        sorted_df = display_df
         outlier_flags = (
-            view.loc[sorted_df.index, "is_outlier"].fillna(False)
-            if "is_outlier" in view.columns
+            sort_view.loc[sorted_df.index, "is_outlier"].fillna(False)
+            if "is_outlier" in sort_view.columns
             else pd.Series(False, index=sorted_df.index)
         )
         styled = sorted_df.style.apply(
