@@ -471,17 +471,42 @@ def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[s
     }
 
 
-_MASTER_LARGE_PYEONG_DISPLAYS = frozenset({"31평", "34평", "44평", "35평"})
+# [34평형 선택] 마스터 버튼 — (단지명, UI평형 또는 내부 34평형) 고정 목록
+_MASTER_34_PYEONG_SELECTION: list[tuple[str, str]] = [
+    ("원베일리", "34평형"),
+    ("퍼스티지", "34평형"),
+    ("리더스원", "34평형"),
+    ("그랑자이", "34평형"),
+    ("삼부", "29평"),
+    ("신현대", "34평"),
+    ("신반포2차", "35평"),
+    ("개포우성 1,2차", "31평"),
+    ("개포우성 1,2차", "44평"),
+]
+
+
+def _label_matches_master_34_target(
+    apt: str,
+    internal_pyeong: str,
+    target_apt: str,
+    target_pyeong: str,
+) -> bool:
+    """마스터 목록 (단지, 평형) — UI 표기·내부 평형그룹 모두 매칭."""
+    if _canonical_sidebar_apt(apt) != _canonical_sidebar_apt(target_apt):
+        return False
+    display = _format_pyeong_for_apt(apt, internal_pyeong)
+    return display == target_pyeong or internal_pyeong == target_pyeong
 
 
 def _labels_for_34_pyeong_master(all_series: list[str]) -> set[str]:
-    """UI 표시 평형(31·34·44·35평) 체크박스만 True — 데이터 평형그룹은 변경하지 않음."""
+    """34평형 마스터 — 고정 (단지·평형) 조합만 선택 (데이터 라벨은 변경하지 않음)."""
     picked: set[str] = set()
     for lb in all_series:
-        apt, pyeong = _extract_label_parts(lb)
-        display = _format_pyeong_for_apt(apt, pyeong)
-        if display in _MASTER_LARGE_PYEONG_DISPLAYS:
-            picked.add(lb)
+        apt, internal = _extract_label_parts(lb)
+        for target_apt, target_pyeong in _MASTER_34_PYEONG_SELECTION:
+            if _label_matches_master_34_target(apt, internal, target_apt, target_pyeong):
+                picked.add(lb)
+                break
     return picked
 
 
