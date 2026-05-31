@@ -50,6 +50,8 @@ BASE_DIR = Path(__file__).resolve().parent
 RENT_CACHE_CSV = BASE_DIR / "rent_data.csv"
 LEGACY_RENT_CACHE_CSV = BASE_DIR / "all_combined_rent_data.csv"
 
+RENT_SALE_LEAK_MAX_MANWON = 400_000  # 40억 — 전월세 캐시 매매가 혼입 상한(만원)
+
 # 월세 40만원 = 전세 1억 → 만원 단위 월세 × 250
 MONTHLY_RENT_TO_DEPOSIT_FACTOR = 250
 
@@ -303,6 +305,93 @@ def _cached_keys(df: pd.DataFrame) -> set[tuple[str, str]]:
     )
 
 
+def _transaction_fingerprint(
+    row: pd.Series | dict,
+    *,
+    amount_col: str,
+    apt_col: str = "아파트",
+) -> tuple[str, str, float, int]:
+    if isinstance(row, dict):
+        getter = row.get
+    else:
+        getter = row.get
+    apt = str(getter(apt_col, "") or getter("타겟명", "") or "").strip()
+    date = str(getter("계약일자", "") or "").strip()
+    try:
+        m2 = round(float(getter("전용면적(㎡)", 0)), 2)
+    except (TypeError, ValueError):
+        m2 = 0.0
+    try:
+        amt = int(float(getter(amount_col, 0) or 0))
+    except (TypeError, ValueError):
+        amt = 0
+    return (apt, date, m2, amt)
+
+
+def purge_rent_sale_cross_contamination(
+    rent_df: pd.DataFrame,
+    sale_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    전월세 캐시에서 매매가 혼입 행 제거.
+    - (단지, 계약일, 면적, 금액)이 매매 캐시와 동일하고 월세=0인 행
+    - 환산보증금 40억(400,000만원) 초과 행
+    """
+    if rent_df.empty:
+        return rent_df
+    out = filter_rent_transactions(rent_df.copy())
+
+    if sale_df is None:
+        from data_service import load_cached_data
+
+        sale_df = load_cached_data()
+
+    sale_keys: set[tuple[str, str, float, int]] = set()
+    if sale_df is not None and not sale_df.empty:
+        prep_sale = sale_df.copy()
+        if "타겟명" not in prep_sale.columns:
+            from data_service import filter_by_targets, normalize_raw_dataframe, parse_targets
+
+            prep_sale = filter_by_targets(
+                normalize_raw_dataframe(prep_sale),
+                parse_targets(getattr(config, "TARGET_APARTMENTS", [])),
+            )
+        for _, row in prep_sale.iterrows():
+            sale_keys.add(
+                _transaction_fingerprint(row, amount_col="거래금액(만원)", apt_col="타겟명")
+            )
+            sale_keys.add(
+                _transaction_fingerprint(row, amount_col="거래금액(만원)", apt_col="아파트")
+            )
+
+    keep_idx: list[object] = []
+    removed = 0
+    for idx, row in out.iterrows():
+        monthly = pd.to_numeric(row.get("월세(만원)"), errors="coerce")
+        monthly_f = 0.0 if pd.isna(monthly) else float(monthly)
+        conv = pd.to_numeric(row.get("환산보증금(만원)"), errors="coerce")
+        conv_f = float(conv) if conv is not None and not pd.isna(conv) else 0.0
+
+        if conv_f > RENT_SALE_LEAK_MAX_MANWON:
+            removed += 1
+            continue
+
+        if monthly_f == 0.0 and sale_keys:
+            fp_apt = _transaction_fingerprint(row, amount_col="환산보증금(만원)", apt_col="아파트")
+            fp_target = _transaction_fingerprint(
+                row, amount_col="환산보증금(만원)", apt_col="타겟명"
+            )
+            if fp_apt in sale_keys or fp_target in sale_keys:
+                removed += 1
+                continue
+
+        keep_idx.append(idx)
+
+    if removed:
+        print(f"[purge] removed {removed} contaminated rent rows", flush=True)
+    return out.loc[keep_idx].copy() if keep_idx else out.iloc[0:0].copy()
+
+
 def filter_rent_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """전월세 캐시 — 매매 행 제거 + 거래유형 고정."""
     if df.empty:
@@ -326,13 +415,12 @@ def load_cached_rent_data() -> pd.DataFrame:
     path = _resolve_rent_cache_path()
     if not path.exists():
         return pd.DataFrame()
-    return filter_rent_transactions(
-        pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
-    )
+    raw = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    return purge_rent_sale_cross_contamination(filter_rent_transactions(raw))
 
 
 def save_cached_rent_data(df: pd.DataFrame) -> None:
-    out = filter_rent_transactions(df)
+    out = purge_rent_sale_cross_contamination(filter_rent_transactions(df))
     out.to_csv(RENT_CACHE_CSV, encoding="utf-8-sig", index=False)
 
 

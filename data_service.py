@@ -1125,6 +1125,9 @@ def reprocess_rent_cache(*, import_supplemental: bool = False) -> pd.DataFrame:
     cached = load_cached_rent_data()
     if not cached.empty:
         cached = enforce_strict_pyeong_on_rent_dataframe(cached)
+        from rent_service import purge_rent_sale_cross_contamination
+
+        cached = purge_rent_sale_cross_contamination(cached)
         cached = cached.drop_duplicates(
             subset=[
                 "조회지역코드",

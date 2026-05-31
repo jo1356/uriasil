@@ -37,7 +37,7 @@ from rent_service import (
     update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v47_ui_restore_rent_isolation"
+_DATA_CACHE_VERSION = "v48_rent_purge_all_apts"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
