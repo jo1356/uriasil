@@ -29,8 +29,13 @@ API_MAX_RETRIES = 3
 API_MAX_PAGES = 200
 
 BASE_DIR = Path(__file__).resolve().parent
-CACHE_CSV = BASE_DIR / "all_combined_data.csv"
+SALE_CACHE_CSV = BASE_DIR / "sales_data.csv"
+LEGACY_SALE_CACHE_CSV = BASE_DIR / "all_combined_data.csv"
+CACHE_CSV = SALE_CACHE_CSV
 CRAWL_VERSION_FILE = BASE_DIR / ".crawl_data_version"
+
+TRANSACTION_TYPE_SALE = "매매"
+TRANSACTION_TYPE_RENT = "전월세"
 
 FIELD_MAP = {
     "aptNm": "아파트",
@@ -924,13 +929,13 @@ def get_data_cache_fingerprint(*, app_cache_version: str = "") -> str:
     """캐시 CSV 수정 시각·크기 해시 — Streamlit st.cache_data 무효화용."""
     import hashlib
 
-    from rent_service import RENT_CACHE_CSV
+    from rent_service import RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV
 
     parts: list[str] = [
         str(getattr(config, "CRAWL_DATA_VERSION", "")),
         str(app_cache_version),
     ]
-    for path in (CACHE_CSV, RENT_CACHE_CSV):
+    for path in (SALE_CACHE_CSV, LEGACY_SALE_CACHE_CSV, RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV):
         if path.exists():
             stat = path.stat()
             parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
@@ -980,12 +985,19 @@ def reprocess_sale_cache() -> pd.DataFrame:
 
 def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
     """
-    data.csv 등 보충 전월세 CSV → all_combined_rent_data.csv 병합.
-    개포우성·신현대 등 API 누락 구간 보강.
+    전월세 전용 보충 CSV → rent_data.csv 병합.
+    data.csv(매매 거래금액만 있는 파일) 등은 절대 병합하지 않음.
     """
-    from rent_service import RENT_CACHE_CSV, load_cached_rent_data, save_cached_rent_data
+    from rent_service import (
+        compute_converted_jeonse_deposit,
+        enforce_strict_pyeong_on_rent_dataframe,
+        load_cached_rent_data,
+        save_cached_rent_data,
+    )
 
-    rel = str(getattr(config, "SUPPLEMENTAL_RENT_CSV", "data.csv"))
+    rel = str(getattr(config, "SUPPLEMENTAL_RENT_CSV", "") or "").strip()
+    if not rel:
+        return 0
     path = csv_path or (BASE_DIR / rel)
     if not path.exists():
         return 0
@@ -998,6 +1010,18 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
     rows: list[dict[str, object]] = []
     for _, r in raw.iterrows():
         try:
+            tx_type = _safe_str(r.get("거래유형", ""))
+            if tx_type == TRANSACTION_TYPE_SALE:
+                continue
+
+            deposit = _parse_amount(str(r.get("보증금(만원)", "")))
+            monthly = _parse_amount(str(r.get("월세(만원)", "")))
+            if deposit is None and monthly is None:
+                # 거래금액(만원)만 있는 행 = 매매 보충 데이터 → 전월세 캐시 병합 금지
+                continue
+            if tx_type and tx_type != TRANSACTION_TYPE_RENT:
+                continue
+
             row_dict = {
                 "법정동": _safe_str(r.get("법정동", "")),
                 "아파트": _safe_str(r.get("아파트", "")),
@@ -1021,10 +1045,9 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
             )
             if group is None:
                 continue
-            amount = _parse_amount(str(r.get("거래금액(만원)", "")))
-            if amount is None:
-                amount = _parse_amount(str(r.get("환산보증금(만원)", "")))
-            if amount is None:
+
+            converted = compute_converted_jeonse_deposit(deposit, monthly)
+            if converted is None:
                 continue
             contract_date = _safe_str(r.get("계약일자", ""))
             deal_ym = _safe_str(
@@ -1034,24 +1057,25 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
                 {
                     "아파트": row_dict["아파트"],
                     "건축년도": r.get("건축년도", ""),
-                    "계약기간": "",
-                    "계약구분": "",
+                    "계약기간": r.get("계약기간", ""),
+                    "계약구분": r.get("계약구분", ""),
                     "계약일": _safe_str(r.get("계약일", "")),
                     "계약월": _safe_str(r.get("계약월", "")),
                     "계약년": _safe_str(r.get("계약년", "")),
-                    "보증금(만원)": amount,
+                    "보증금(만원)": deposit or 0.0,
                     "전용면적(㎡)": m2,
                     "층": r.get("층", ""),
                     "지번": r.get("지번", ""),
-                    "월세(만원)": 0.0,
-                    "종전계약보증금": "",
-                    "종전계약월세": "",
+                    "월세(만원)": monthly or 0.0,
+                    "종전계약보증금": r.get("종전계약보증금", ""),
+                    "종전계약월세": r.get("종전계약월세", ""),
                     "지역코드": r.get("지역코드", r.get("조회지역코드", "11680")),
                     "법정동": row_dict["법정동"],
-                    "갱신요구권사용": "",
+                    "갱신요구권사용": r.get("갱신요구권사용", ""),
                     "평형그룹": group,
-                    "환산보증금(만원)": amount,
-                    "거래금액(만원)": amount,
+                    "환산보증금(만원)": converted,
+                    "거래금액(만원)": converted,
+                    "거래유형": TRANSACTION_TYPE_RENT,
                     "조회지역코드": _safe_str(r.get("조회지역코드", "11680")),
                     "조회계약년월": deal_ym,
                     "계약일자": contract_date,
@@ -1064,7 +1088,7 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
     if not rows:
         return 0
 
-    supplement = enforce_strict_pyeong_on_dataframe(pd.DataFrame(rows))
+    supplement = enforce_strict_pyeong_on_rent_dataframe(pd.DataFrame(rows))
     if supplement.empty:
         return 0
 
@@ -1090,20 +1114,25 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
     return len(supplement)
 
 
-def reprocess_rent_cache(*, import_supplemental: bool = True) -> pd.DataFrame:
-    """기존 전월세 캐시 — 평형 재적용·(선택) 보충 CSV 병합 후 저장."""
-    from rent_service import load_cached_rent_data, save_cached_rent_data
+def reprocess_rent_cache(*, import_supplemental: bool = False) -> pd.DataFrame:
+    """기존 전월세 캐시 — 전월세 전용 평형 재적용 후 저장 (매매 파이프라인과 분리)."""
+    from rent_service import (
+        enforce_strict_pyeong_on_rent_dataframe,
+        load_cached_rent_data,
+        save_cached_rent_data,
+    )
 
     cached = load_cached_rent_data()
     if not cached.empty:
-        cached = enforce_strict_pyeong_on_dataframe(cached)
+        cached = enforce_strict_pyeong_on_rent_dataframe(cached)
         cached = cached.drop_duplicates(
             subset=[
                 "조회지역코드",
                 "조회계약년월",
                 "아파트",
                 "계약일자",
-                "거래금액(만원)",
+                "보증금(만원)",
+                "월세(만원)",
                 "전용면적(㎡)",
                 "층",
             ],
@@ -1115,8 +1144,8 @@ def reprocess_rent_cache(*, import_supplemental: bool = True) -> pd.DataFrame:
     return load_cached_rent_data()
 
 
-def refresh_local_cache_files(*, import_supplemental: bool = True) -> dict[str, int]:
-    """API 없이 로컬 CSV 재처리·보충 병합 (fetch_data --reprocess)."""
+def refresh_local_cache_files(*, import_supplemental: bool = False) -> dict[str, int]:
+    """API 없이 로컬 CSV 재처리 (매매·전월세 각각 독립)."""
     sale = reprocess_sale_cache()
     rent = reprocess_rent_cache(import_supplemental=import_supplemental)
     _write_crawl_version_stamp()
@@ -1150,6 +1179,7 @@ def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
         row = dict(row)
         row["전용면적(㎡)"] = str(m2)
         row["평형그룹"] = group
+        row["거래유형"] = TRANSACTION_TYPE_SALE
         return row
     except Exception as exc:
         _log_row_parse_error("classify_ingest", exc)
@@ -1298,11 +1328,6 @@ def enforce_strict_pyeong_on_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return out[out["평형그룹"].notna()].copy()
 
 
-def clear_cache_file() -> None:
-    if CACHE_CSV.exists():
-        CACHE_CSV.unlink()
-
-
 def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
     """타겟 단지 행 매칭 (exact_name·번들 매칭·regex 유연화)."""
     if not {"법정동", "아파트"}.issubset(df.columns):
@@ -1375,14 +1400,44 @@ def _cached_keys(df: pd.DataFrame) -> set[tuple[str, str]]:
     )
 
 
+def filter_sale_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """매매 캐시 — 전월세 행 제거 + 거래유형 고정."""
+    if df.empty:
+        return df
+    out = df.copy()
+    if "거래유형" in out.columns:
+        mask = out["거래유형"].astype(str).str.strip().isin(("", TRANSACTION_TYPE_SALE, "nan"))
+        out = out[mask | out["거래유형"].isna()].copy()
+    out["거래유형"] = TRANSACTION_TYPE_SALE
+    return out
+
+
+def _resolve_sale_cache_path() -> Path:
+    if SALE_CACHE_CSV.exists():
+        return SALE_CACHE_CSV
+    if LEGACY_SALE_CACHE_CSV.exists():
+        return LEGACY_SALE_CACHE_CSV
+    return SALE_CACHE_CSV
+
+
 def load_cached_data() -> pd.DataFrame:
-    if not CACHE_CSV.exists():
+    path = _resolve_sale_cache_path()
+    if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(CACHE_CSV, encoding="utf-8-sig", low_memory=False)
+    return filter_sale_transactions(
+        pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    )
 
 
 def save_cached_data(df: pd.DataFrame) -> None:
-    df.to_csv(CACHE_CSV, index=False, encoding="utf-8-sig")
+    out = filter_sale_transactions(df)
+    out.to_csv(SALE_CACHE_CSV, index=False, encoding="utf-8-sig")
+
+
+def clear_cache_file() -> None:
+    for path in (SALE_CACHE_CSV, LEGACY_SALE_CACHE_CSV):
+        if path.exists():
+            path.unlink()
 
 
 def _region_label(lawd_cd: str, index: int) -> str:
@@ -1502,9 +1557,8 @@ def update_cache(
         except Exception as exc:
             _log_row_parse_error("save_sale_cache", exc)
 
-    # 월 슬롯이 최신이어도 평형 규칙·보충 CSV 반영 (대시보드 '최신 캐시' 무변화 버그 방지)
+    # 매매 캐시만 재처리 — 전월세 캐시는 rent_service.update_rent_cache에서만 갱신
     reprocess_sale_cache()
-    reprocess_rent_cache(import_supplemental=True)
     cached = load_cached_data()
     _write_crawl_version_stamp()
 

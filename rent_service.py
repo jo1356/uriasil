@@ -14,6 +14,8 @@ import config
 from data_service import (
     API_MAX_PAGES,
     API_SLEEP_SEC,
+    TRANSACTION_TYPE_RENT,
+    TRANSACTION_TYPE_SALE,
     TargetDict,
     ProgressCallback,
     _DERIVED_DASHBOARD_COLUMNS,
@@ -45,7 +47,8 @@ RENT_API_URL = (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-RENT_CACHE_CSV = BASE_DIR / "all_combined_rent_data.csv"
+RENT_CACHE_CSV = BASE_DIR / "rent_data.csv"
+LEGACY_RENT_CACHE_CSV = BASE_DIR / "all_combined_rent_data.csv"
 
 # 월세 40만원 = 전세 1억 → 만원 단위 월세 × 250
 MONTHLY_RENT_TO_DEPOSIT_FACTOR = 250
@@ -138,6 +141,7 @@ def classify_rent_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
         classified["월세(만원)"] = str(monthly or 0)
         classified["환산보증금(만원)"] = str(converted)
         classified["거래금액(만원)"] = str(converted)
+        classified["거래유형"] = TRANSACTION_TYPE_RENT
         return classified
     except Exception as exc:
         _log_row_parse_error("classify_rent_ingest", exc)
@@ -299,19 +303,43 @@ def _cached_keys(df: pd.DataFrame) -> set[tuple[str, str]]:
     )
 
 
+def filter_rent_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """전월세 캐시 — 매매 행 제거 + 거래유형 고정."""
+    if df.empty:
+        return df
+    out = df.copy()
+    if "거래유형" in out.columns:
+        out = out[out["거래유형"].astype(str).str.strip() != TRANSACTION_TYPE_SALE].copy()
+    out["거래유형"] = TRANSACTION_TYPE_RENT
+    return out
+
+
+def _resolve_rent_cache_path() -> Path:
+    if RENT_CACHE_CSV.exists():
+        return RENT_CACHE_CSV
+    if LEGACY_RENT_CACHE_CSV.exists():
+        return LEGACY_RENT_CACHE_CSV
+    return RENT_CACHE_CSV
+
+
 def load_cached_rent_data() -> pd.DataFrame:
-    if not RENT_CACHE_CSV.exists():
+    path = _resolve_rent_cache_path()
+    if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(RENT_CACHE_CSV, encoding="utf-8-sig", low_memory=False)
+    return filter_rent_transactions(
+        pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    )
 
 
 def save_cached_rent_data(df: pd.DataFrame) -> None:
-    df.to_csv(RENT_CACHE_CSV, encoding="utf-8-sig", index=False)
+    out = filter_rent_transactions(df)
+    out.to_csv(RENT_CACHE_CSV, encoding="utf-8-sig", index=False)
 
 
 def clear_rent_cache_file() -> None:
-    if RENT_CACHE_CSV.exists():
-        RENT_CACHE_CSV.unlink()
+    for path in (RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV):
+        if path.exists():
+            path.unlink()
 
 
 def update_rent_cache(
@@ -348,40 +376,96 @@ def update_rent_cache(
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
+    prev_flush_year: str | None = None
+
+    def _flush_rent_frames(*, reason: str = "") -> None:
+        nonlocal cached, new_frames
+        if not new_frames:
+            return
+        try:
+            new_df = enforce_strict_pyeong_on_rent_dataframe(
+                pd.concat(new_frames, ignore_index=True)
+            )
+            if not new_df.empty:
+                cached = (
+                    pd.concat([cached, new_df], ignore_index=True)
+                    if not cached.empty
+                    else new_df
+                )
+                cached = cached.drop_duplicates(
+                    subset=[
+                        "조회지역코드",
+                        "조회계약년월",
+                        "아파트",
+                        "계약일자",
+                        "보증금(만원)",
+                        "월세(만원)",
+                        "전용면적(㎡)",
+                        "층",
+                    ],
+                    keep="last",
+                )
+                save_cached_rent_data(cached)
+            new_frames = []
+            try:
+                tag = f" ({reason})" if reason else ""
+                print(
+                    f"[SAVE] [전월세] 중간 저장{tag} - 누적 {len(cached):,}건 -> rent_data.csv",
+                    flush=True,
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            _log_row_parse_error("flush_rent_frames", exc)
 
     for idx, (lawd_cd, deal_ymd) in enumerate(tasks, start=1):
         region = _region_label(lawd_cd, lawd_codes.index(lawd_cd))
-        msg = f"[전월세] {region} {deal_ymd[:4]}.{deal_ymd[4:]}월 수집 중..."
+        year, month = deal_ymd[:4], deal_ymd[4:6]
+        msg = f"[전월세] {region} {year}.{month}월 수집 중..."
         if progress:
             progress(idx / max(total_tasks, 1), msg)
 
+        chunk_rows = 0
         try:
             chunk = fetch_apt_rent_data(service_key, lawd_cd, deal_ymd)
             if chunk is not None and not chunk.empty:
                 chunk = chunk.copy()
                 chunk["조회지역코드"] = lawd_cd
                 chunk["조회계약년월"] = deal_ymd
+                chunk_rows = len(chunk)
                 new_frames.append(chunk)
         except Exception as exc:
             _log_api_fetch_error(f"[전월세] {region} {deal_ymd}", exc)
+            print(f"[ERR] [{year}년 {month}월] {region} 전월세 오류 - skip ({exc})", flush=True)
             if progress:
                 progress(
                     idx / max(total_tasks, 1),
                     f"[전월세] 오류({deal_ymd}): {exc} — 다음 월로 진행",
                 )
+        else:
+            total_rows = len(cached) + sum(len(f) for f in new_frames)
+            print(
+                f"[OK] [{year}년 {int(month)}월] {region} 전월세 {chunk_rows}건 수집 "
+                f"(누적 ~{total_rows:,}건, {idx}/{total_tasks})",
+                flush=True,
+            )
         finally:
             time.sleep(API_SLEEP_SEC)
 
+        if force_rebuild and idx % 10 == 0:
+            _flush_rent_frames(reason=f"{idx}/{total_tasks} 슬롯")
+
+        if (
+            force_rebuild
+            and month == "12"
+            and lawd_cd == lawd_codes[-1]
+            and prev_flush_year != year
+        ):
+            _flush_rent_frames(reason=f"{year}년 완료")
+            prev_flush_year = year
+
     if new_frames:
-        new_df = enforce_strict_pyeong_on_rent_dataframe(
-            pd.concat(new_frames, ignore_index=True)
-        )
-        if not new_df.empty:
-            cached = (
-                pd.concat([cached, new_df], ignore_index=True)
-                if not cached.empty
-                else new_df
-            )
+        _flush_rent_frames(reason="최종 병합")
 
     if not cached.empty:
         cached = enforce_strict_pyeong_on_rent_dataframe(cached)
@@ -402,7 +486,7 @@ def update_rent_cache(
 
     from data_service import reprocess_rent_cache
 
-    reprocess_rent_cache(import_supplemental=True)
+    reprocess_rent_cache(import_supplemental=False)
     cached = load_cached_rent_data()
 
     if progress and total_tasks == 0:
@@ -410,6 +494,7 @@ def update_rent_cache(
     elif progress:
         progress(1.0, f"[전월세] 완료 - 총 {len(cached):,}건")
 
+    print(f"[DONE] [전월세] 수집 완료 - 총 {len(cached):,}건", flush=True)
     return cached
 
 

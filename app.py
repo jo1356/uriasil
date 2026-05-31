@@ -33,7 +33,7 @@ from rent_service import (
     rent_cache_status,
 )
 
-_DATA_CACHE_VERSION = "v44_local_csv_gaepo127_sin107"
+_DATA_CACHE_VERSION = "v46_sale_rent_isolation"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -1157,8 +1157,8 @@ def _render_sidebar(
         st.divider()
         st.subheader("📥 데이터")
         st.caption(
-            "대시보드는 저장소에 포함된 `all_combined_data.csv`·"
-            "`all_combined_rent_data.csv`를 읽습니다. "
+            "대시보드는 저장소에 포함된 `sales_data.csv`(매매)와 "
+            "`rent_data.csv`(전월세)를 각각 읽습니다. "
             "전체 API 재수집은 웹이 아닌 로컬에서 "
             "`python fetch_data.py --rebuild` 로 실행하세요."
         )
@@ -1166,7 +1166,7 @@ def _render_sidebar(
         if st.button("🔄 로컬 CSV 재처리 (API 호출 없음)", use_container_width=True):
             try:
                 with st.spinner("평형 규칙 재적용·data.csv 보충 병합 중..."):
-                    stats = refresh_local_cache_files(import_supplemental=True)
+                    stats = refresh_local_cache_files(import_supplemental=False)
                 _clear_data_caches()
                 st.success(
                     f"재처리 완료 — 매매 {stats['sale_rows']:,}건 / "

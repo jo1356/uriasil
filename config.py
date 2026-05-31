@@ -12,7 +12,7 @@ REGION_NAME = ["강남구", "서초구", "송파구", "영등포구"]
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v7_full_rebuild_gaepo127_sin107"
+CRAWL_DATA_VERSION = "v8_sale_rent_pipeline_isolation"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
@@ -48,8 +48,9 @@ CRAWL_APARTMENT_API_NAMES = [
     "신반포2",
 ]
 
-# API 미수집 구간 보충용 CSV (프로젝트 루트 data.csv — 전월세 형식)
-SUPPLEMENTAL_RENT_CSV = "data.csv"
+# API 미수집 구간 보충용 — 반드시 보증금/월세 컬럼이 있는 전월세 전용 CSV만 지정
+# data.csv는 매매 데이터이므로 여기에 넣지 마세요.
+SUPPLEMENTAL_RENT_CSV = ""
 
 # (구버전) 월별 수동 지정 — 대시보드에서는 DATA_START_YMD ~ 현재월 자동 수집
 # DEAL_YMD = ["202601", "202602"]

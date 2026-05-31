@@ -58,7 +58,7 @@ def main() -> None:
     print("=" * 60)
 
     if args.reprocess:
-        stats = refresh_local_cache_files(import_supplemental=True)
+        stats = refresh_local_cache_files(import_supplemental=False)
         print(f"\n  재처리 완료: 매매 {stats['sale_rows']:,}건 / 전월세 {stats['rent_rows']:,}건\n")
         return
 
