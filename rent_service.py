@@ -9,17 +9,21 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd
-import requests
 
 import config
 from data_service import (
+    API_MAX_PAGES,
     API_SLEEP_SEC,
     TargetDict,
     ProgressCallback,
     _DERIVED_DASHBOARD_COLUMNS,
     _as_list,
+    _log_api_fetch_error,
     _log_row_parse_error,
+    _parse_api_xml_root,
     _region_label,
+    _requests_get_with_retries,
+    _safe_parse_int,
     _safe_assign_pyeong_group_for_row,
     add_pyeong_columns,
     assign_pyeong_group_for_cache,
@@ -148,54 +152,76 @@ def fetch_apt_rent_data(
 ) -> pd.DataFrame:
     all_rows: list[dict[str, str]] = []
     page_no = 1
-    while True:
-        params = {
-            "serviceKey": service_key,
-            "LAWD_CD": lawd_cd,
-            "DEAL_YMD": deal_ymd,
-            "pageNo": page_no,
-            "numOfRows": page_size,
-        }
-        response = requests.get(RENT_API_URL, params=params, timeout=60)
-        if response.status_code == 403:
-            raise RuntimeError(
-                "전월세 API 권한 없음(403). 공공데이터포털에서 "
-                "'국토교통부_아파트 전월세 실거래가 자료' 활용 신청 후 "
-                "config.py의 SERVICE_KEY로 다시 수집해 주세요."
-            )
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
+    ctx = f"rent {lawd_cd}/{deal_ymd}"
 
-        auth_error = _text(root.find(".//returnAuthMsg"))
-        if auth_error:
-            raise RuntimeError(f"인증키 오류: {auth_error}")
+    while page_no <= API_MAX_PAGES:
+        page_ctx = f"{ctx} page={page_no}"
+        try:
+            params = {
+                "serviceKey": service_key,
+                "LAWD_CD": lawd_cd,
+                "DEAL_YMD": deal_ymd,
+                "pageNo": page_no,
+                "numOfRows": page_size,
+            }
+            response = _requests_get_with_retries(RENT_API_URL, params, context=page_ctx)
+            if response is None:
+                break
 
-        result_code = _text(root.find(".//resultCode"))
-        result_msg = _text(root.find(".//resultMsg"))
-        if result_code and result_code not in ("00", "000"):
-            raise RuntimeError(f"API 오류 ({result_code}): {result_msg}")
+            if response.status_code == 403:
+                _log_api_fetch_error(
+                    page_ctx,
+                    RuntimeError(
+                        "전월세 API 권한 없음(403). 공공데이터포털에서 "
+                        "'국토교통부_아파트 전월세 실거래가 자료' 활용 신청 후 "
+                        "SERVICE_KEY로 다시 수집해 주세요."
+                    ),
+                )
+                break
 
-        items = root.findall(".//item")
-        if not items:
-            break
-        for item in items:
-            try:
-                row = _item_to_row(item)
-                if not row:
+            root = _parse_api_xml_root(response.content, context=page_ctx)
+            if root is None:
+                break
+
+            auth_error = _text(root.find(".//returnAuthMsg"))
+            if auth_error:
+                _log_api_fetch_error(page_ctx, RuntimeError(f"인증키 오류: {auth_error}"))
+                break
+
+            result_code = _text(root.find(".//resultCode"))
+            result_msg = _text(root.find(".//resultMsg"))
+            if result_code and result_code not in ("00", "000"):
+                _log_api_fetch_error(
+                    page_ctx,
+                    RuntimeError(f"API 오류 ({result_code}): {result_msg}"),
+                )
+                break
+
+            items = root.findall(".//item") or []
+            if not items:
+                break
+
+            for item in items:
+                try:
+                    row = _item_to_row(item)
+                    if not row:
+                        continue
+                    classified = classify_rent_row_at_ingest(row)
+                    if classified:
+                        all_rows.append(classified)
+                except Exception as exc:
+                    _log_row_parse_error("fetch_rent", exc)
                     continue
-                classified = classify_rent_row_at_ingest(row)
-                if classified:
-                    all_rows.append(classified)
-            except Exception as exc:
-                _log_row_parse_error("fetch_rent", exc)
-                continue
 
-        total_count = _text(root.find(".//totalCount"))
-        if total_count and page_no * page_size >= int(total_count):
+            total_count = _safe_parse_int(_text(root.find(".//totalCount")))
+            if total_count is not None and page_no * page_size >= total_count:
+                break
+            if len(items) < page_size:
+                break
+            page_no += 1
+        except Exception as exc:
+            _log_api_fetch_error(page_ctx, exc)
             break
-        if len(items) < page_size:
-            break
-        page_no += 1
 
     return pd.DataFrame(all_rows)
 
@@ -331,18 +357,20 @@ def update_rent_cache(
 
         try:
             chunk = fetch_apt_rent_data(service_key, lawd_cd, deal_ymd)
+            if chunk is not None and not chunk.empty:
+                chunk = chunk.copy()
+                chunk["조회지역코드"] = lawd_cd
+                chunk["조회계약년월"] = deal_ymd
+                new_frames.append(chunk)
         except Exception as exc:
+            _log_api_fetch_error(f"[전월세] {region} {deal_ymd}", exc)
             if progress:
-                progress(idx / max(total_tasks, 1), f"[전월세] 오류({deal_ymd}): {exc}")
-            time.sleep(1.0)
-            continue
-
-        if not chunk.empty:
-            chunk["조회지역코드"] = lawd_cd
-            chunk["조회계약년월"] = deal_ymd
-            new_frames.append(chunk)
-
-        time.sleep(API_SLEEP_SEC)
+                progress(
+                    idx / max(total_tasks, 1),
+                    f"[전월세] 오류({deal_ymd}): {exc} — 다음 월로 진행",
+                )
+        finally:
+            time.sleep(API_SLEEP_SEC)
 
     if new_frames:
         new_df = enforce_strict_pyeong_on_rent_dataframe(

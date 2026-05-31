@@ -24,6 +24,9 @@ API_URL = (
 PLACEHOLDER_KEY = "여기에_발급받은_API_인증키를_입력하세요"
 PYEONG_FROM_M2 = 0.3025
 API_SLEEP_SEC = 0.35
+API_REQUEST_TIMEOUT = 15
+API_MAX_RETRIES = 3
+API_MAX_PAGES = 200
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_CSV = BASE_DIR / "all_combined_data.csv"
@@ -121,6 +124,55 @@ def _safe_str(value: object, default: str = "") -> str:
 
 def _log_row_parse_error(context: str, exc: Exception) -> None:
     print(f"Error parsing row ({context}): {exc}")
+
+
+def _log_api_fetch_error(context: str, exc: Exception) -> None:
+    print(f"Error fetching API ({context}): {exc}")
+
+
+def _safe_parse_int(value: object) -> int | None:
+    try:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _requests_get_with_retries(
+    url: str,
+    params: dict[str, object],
+    *,
+    context: str,
+) -> requests.Response | None:
+    """requests.get — timeout·최대 3회 재시도 후 None."""
+    for attempt in range(1, API_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                timeout=API_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response
+        except Exception as exc:
+            _log_api_fetch_error(f"{context} (attempt {attempt}/{API_MAX_RETRIES})", exc)
+            if attempt >= API_MAX_RETRIES:
+                return None
+            time.sleep(min(attempt, 3))
+    return None
+
+
+def _parse_api_xml_root(content: bytes | None, *, context: str) -> ET.Element | None:
+    """API XML 본문 파싱 — 실패 시 None."""
+    if not content:
+        return None
+    try:
+        return ET.fromstring(content)
+    except Exception as exc:
+        _log_api_fetch_error(f"XML parse {context}", exc)
+        return None
 
 
 def _safe_assign_pyeong_group_for_row(
@@ -1135,48 +1187,65 @@ def fetch_apt_trade_data(
 ) -> pd.DataFrame:
     all_rows: list[dict[str, str]] = []
     page_no = 1
-    while True:
-        params = {
-            "serviceKey": service_key,
-            "LAWD_CD": lawd_cd,
-            "DEAL_YMD": deal_ymd,
-            "pageNo": page_no,
-            "numOfRows": page_size,
-        }
-        response = requests.get(API_URL, params=params, timeout=60)
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
+    ctx = f"trade {lawd_cd}/{deal_ymd}"
 
-        auth_error = _text(root.find(".//returnAuthMsg"))
-        if auth_error:
-            raise RuntimeError(f"인증키 오류: {auth_error}")
+    while page_no <= API_MAX_PAGES:
+        page_ctx = f"{ctx} page={page_no}"
+        try:
+            params = {
+                "serviceKey": service_key,
+                "LAWD_CD": lawd_cd,
+                "DEAL_YMD": deal_ymd,
+                "pageNo": page_no,
+                "numOfRows": page_size,
+            }
+            response = _requests_get_with_retries(API_URL, params, context=page_ctx)
+            if response is None:
+                break
 
-        result_code = _text(root.find(".//resultCode"))
-        result_msg = _text(root.find(".//resultMsg"))
-        if result_code and result_code not in ("00", "000"):
-            raise RuntimeError(f"API 오류 ({result_code}): {result_msg}")
+            root = _parse_api_xml_root(response.content, context=page_ctx)
+            if root is None:
+                break
 
-        items = root.findall(".//item")
-        if not items:
-            break
-        for item in items:
-            try:
-                row = _item_to_row(item)
-                if not row:
+            auth_error = _text(root.find(".//returnAuthMsg"))
+            if auth_error:
+                _log_api_fetch_error(page_ctx, RuntimeError(f"인증키 오류: {auth_error}"))
+                break
+
+            result_code = _text(root.find(".//resultCode"))
+            result_msg = _text(root.find(".//resultMsg"))
+            if result_code and result_code not in ("00", "000"):
+                _log_api_fetch_error(
+                    page_ctx,
+                    RuntimeError(f"API 오류 ({result_code}): {result_msg}"),
+                )
+                break
+
+            items = root.findall(".//item") or []
+            if not items:
+                break
+
+            for item in items:
+                try:
+                    row = _item_to_row(item)
+                    if not row:
+                        continue
+                    classified = classify_row_at_ingest(row)
+                    if classified:
+                        all_rows.append(classified)
+                except Exception as exc:
+                    _log_row_parse_error("fetch_trade", exc)
                     continue
-                classified = classify_row_at_ingest(row)
-                if classified:
-                    all_rows.append(classified)
-            except Exception as exc:
-                _log_row_parse_error("fetch_trade", exc)
-                continue
 
-        total_count = _text(root.find(".//totalCount"))
-        if total_count and page_no * page_size >= int(total_count):
+            total_count = _safe_parse_int(_text(root.find(".//totalCount")))
+            if total_count is not None and page_no * page_size >= total_count:
+                break
+            if len(items) < page_size:
+                break
+            page_no += 1
+        except Exception as exc:
+            _log_api_fetch_error(page_ctx, exc)
             break
-        if len(items) < page_size:
-            break
-        page_no += 1
 
     return pd.DataFrame(all_rows)
 
@@ -1369,18 +1438,20 @@ def update_cache(
 
         try:
             chunk = fetch_apt_trade_data(service_key, lawd_cd, deal_ymd)
+            if chunk is not None and not chunk.empty:
+                chunk = chunk.copy()
+                chunk["조회지역코드"] = lawd_cd
+                chunk["조회계약년월"] = deal_ymd
+                new_frames.append(chunk)
         except Exception as exc:
+            _log_api_fetch_error(f"{region} {deal_ymd}", exc)
             if progress:
-                progress(idx / max(total_tasks, 1), f"오류({deal_ymd}): {exc}")
-            time.sleep(1.0)
-            continue
-
-        if not chunk.empty:
-            chunk["조회지역코드"] = lawd_cd
-            chunk["조회계약년월"] = deal_ymd
-            new_frames.append(chunk)
-
-        time.sleep(API_SLEEP_SEC)
+                progress(
+                    idx / max(total_tasks, 1),
+                    f"오류({deal_ymd}): {exc} — 다음 월로 진행",
+                )
+        finally:
+            time.sleep(API_SLEEP_SEC)
 
     if new_frames:
         try:
