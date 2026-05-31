@@ -89,13 +89,13 @@ _SIDEBAR_APT_ORDER = getattr(
     "DASHBOARD_ALLOWED_COMPLEX_LABELS",
     [
         "원베일리",
-        "신반포2차",
         "퍼스티지",
-        "신현대",
-        "그랑자이",
-        "잠실주공5단지",
         "리더스원",
+        "그랑자이",
+        "신현대",
+        "신반포2차",
         "개포우성 1,2차",
+        "잠실주공5단지",
         "삼부",
     ],
 )
@@ -313,6 +313,7 @@ def prepare_chart_comparison_data(
         return chart_df
 
     chart_df["계약일자_표시"] = pd.to_datetime(chart_df["계약일자_표시"])
+    ordered_labels = _ordered_chart_labels(list(selected_labels))
     master = (
         chart_df["계약일자_표시"]
         .drop_duplicates()
@@ -322,7 +323,7 @@ def prepare_chart_comparison_data(
     tolerance = pd.Timedelta(days=tolerance_days)
     parts: list[pd.DataFrame] = []
 
-    for label in selected_labels:
+    for label in ordered_labels:
         sub = chart_df.loc[chart_df["차트라벨"] == label].copy()
         if sub.empty:
             continue
@@ -384,7 +385,21 @@ def prepare_raw_chart_data(
     if out.empty:
         return out
     out["계약일자_표시"] = pd.to_datetime(out["계약일자_표시"])
-    return out.sort_values("계약일자_표시").reset_index(drop=True)
+    out["아파트명"] = [
+        _canonical_sidebar_apt(_extract_label_parts(str(lb))[0])
+        for lb in out["차트라벨"]
+    ]
+    label_order = _ordered_chart_labels(list(selected_labels))
+    out = _apply_apt_display_categorical(
+        out,
+        apt_col="아파트명",
+        label_col="차트라벨",
+        label_order=label_order,
+    )
+    return (
+        out.sort_values(["아파트명", "차트라벨", "계약일자_표시"])
+        .reset_index(drop=True)
+    )
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -489,16 +504,57 @@ def _canonical_sidebar_apt(name: str) -> str:
     return _SIDEBAR_APT_ALIASES.get(text, text)
 
 
-def _apt_sidebar_sort_key(name: str) -> tuple[int, str]:
-    canonical = _canonical_sidebar_apt(name)
+def _apt_display_index(apt_name: str) -> int:
+    canonical = _canonical_sidebar_apt(apt_name)
     try:
-        return _SIDEBAR_APT_ORDER.index(canonical), str(name).strip()
+        return _SIDEBAR_APT_ORDER.index(canonical)
     except ValueError:
-        return len(_SIDEBAR_APT_ORDER), str(name).strip()
+        return len(_SIDEBAR_APT_ORDER)
+
+
+def _apt_sidebar_sort_key(name: str) -> tuple[int, str]:
+    return _apt_display_index(name), str(name).strip()
 
 
 def _apt_rank(name: str) -> tuple[int, str]:
     return _apt_sidebar_sort_key(name)
+
+
+def _ordered_chart_labels(labels: list[str]) -> list[str]:
+    """차트라벨 — 단지 고정 순서 → 24평형 → 34평형."""
+    def sort_key(lb: str) -> tuple[int, int, str]:
+        apt, p = _extract_label_parts(lb)
+        return (_apt_display_index(apt), _PYEONG_PRIORITY.get(p, 999), lb)
+
+    return sorted(labels, key=sort_key)
+
+
+def _apply_apt_display_categorical(
+    df: pd.DataFrame,
+    apt_col: str = "아파트명",
+    *,
+    label_col: str | None = "차트라벨",
+    label_order: list[str] | None = None,
+) -> pd.DataFrame:
+    """단지·차트라벨 Categorical — sidebar/chart/table 공통 정렬."""
+    if df.empty or apt_col not in df.columns:
+        return df
+    out = df.copy()
+    categories = list(_SIDEBAR_APT_ORDER)
+    extras = [a for a in out[apt_col].astype(str).unique() if a not in categories]
+    out[apt_col] = pd.Categorical(
+        out[apt_col].astype(str),
+        categories=categories + extras,
+        ordered=True,
+    )
+    if label_col and label_col in out.columns:
+        order = label_order or _ordered_chart_labels(out[label_col].astype(str).unique().tolist())
+        out[label_col] = pd.Categorical(
+            out[label_col].astype(str),
+            categories=order,
+            ordered=True,
+        )
+    return out
 
 
 def _is_jamsil_jugong5_apt(apt_name: str | None) -> bool:
@@ -581,18 +637,18 @@ def build_chart_cached(
     data_file_fp: str = "",
 ) -> go.Figure:
     """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
-    labels = list(selected_labels)
+    labels = _ordered_chart_labels(list(selected_labels))
     raw_chart = _prepare_raw_chart_df(
         data_source,
         df,
-        tuple(selected_labels),
+        tuple(labels),
         _DATA_CACHE_VERSION,
         data_file_fp,
     )
     tooltip_df = _prepare_comparison_chart_df(
         data_source,
         df,
-        tuple(selected_labels),
+        tuple(labels),
         _DATA_CACHE_VERSION,
         data_file_fp,
     )
@@ -607,17 +663,19 @@ def build_chart_cached(
 
 
 def sort_chart_labels_for_ui(labels: list[str]) -> list[str]:
-    def sort_key(lb: str) -> tuple[int, str, int, str]:
-        apt, p = _extract_label_parts(lb)
-        apt_order, apt_name = _apt_rank(apt)
-        p_order = _PYEONG_PRIORITY.get(p, 999)
-        return (apt_order, apt_name, p_order, lb)
-
-    return sorted(labels, key=sort_key)
+    return _ordered_chart_labels(labels)
 
 
 def sort_apartment_options_for_ui(apts: list[str]) -> list[str]:
-    return sorted(apts, key=_apt_sidebar_sort_key)
+    """DASHBOARD_ALLOWED_COMPLEX_LABELS 순서 고정 (가나다 정렬 없음)."""
+    apt_set = set(apts)
+    ordered = [a for a in _SIDEBAR_APT_ORDER if a in apt_set]
+    seen = set(ordered)
+    for apt in apts:
+        if apt not in seen:
+            ordered.append(apt)
+            seen.add(apt)
+    return ordered
 
 
 def _get_series_labels_from_df(df: pd.DataFrame) -> list[str]:
@@ -1180,7 +1238,43 @@ def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
             display_df["거래금액"] = display_df["거래금액(만원)"].apply(_format_amount_korean)
             display_df = display_df.drop(columns=["거래금액(만원)"])
 
-        sorted_df = display_df.sort_values("계약일자", ascending=False)
+        apt_name_col = (
+            "타겟명"
+            if "타겟명" in view.columns
+            else ("아파트" if "아파트" in view.columns else None)
+        )
+        sort_view = view.copy()
+        if apt_name_col:
+            sort_view["아파트명"] = (
+                sort_view[apt_name_col].astype(str).map(_canonical_sidebar_apt)
+            )
+        elif "차트라벨" in sort_view.columns:
+            sort_view["아파트명"] = [
+                _extract_label_parts(str(lb))[0] for lb in sort_view["차트라벨"]
+            ]
+        if "아파트명" not in sort_view.columns:
+            sorted_df = display_df.sort_values("계약일자", ascending=False)
+        else:
+            label_order = (
+                _ordered_chart_labels(sort_view["차트라벨"].astype(str).unique().tolist())
+                if "차트라벨" in sort_view.columns
+                else None
+            )
+            sort_view = _apply_apt_display_categorical(
+                sort_view,
+                apt_col="아파트명",
+                label_col="차트라벨" if "차트라벨" in sort_view.columns else None,
+                label_order=label_order,
+            )
+            sort_cols = ["아파트명"]
+            if "차트라벨" in sort_view.columns:
+                sort_cols.append("차트라벨")
+            sort_cols.append("계약일자")
+            sorted_view = sort_view.sort_values(
+                sort_cols,
+                ascending=[True] * (len(sort_cols) - 1) + [False],
+            )
+            sorted_df = display_df.loc[sorted_view.index]
         outlier_flags = (
             view.loc[sorted_df.index, "is_outlier"].fillna(False)
             if "is_outlier" in view.columns

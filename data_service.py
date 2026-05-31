@@ -1281,20 +1281,17 @@ def prepare_dashboard_data(
 
 
 def sort_chart_labels(labels: list[str], targets: list[TargetDict]) -> list[str]:
-    """config 단지 순서 → 평형 순으로 범례/선택 목록 정렬."""
+    """DASHBOARD_ALLOWED_COMPLEX_LABELS 순 → 평형 순으로 범례/선택 목록 정렬."""
+    order = getattr(config, "DASHBOARD_ALLOWED_COMPLEX_LABELS", [])
     pyeong_rank = {name: i for i, name in enumerate(all_pyeong_labels())}
-    target_keys: list[str] = []
-    for t in targets:
-        target_keys.append(str(t.get("label") or t["name"]))
-        target_keys.append(str(t["name"]))
 
     def sort_key(label: str) -> tuple[int, int, str]:
         apt_part = label.rsplit(" (", 1)[0] if " (" in label else label
         pyeong_part = label.rsplit(" (", 1)[-1].rstrip(")") if " (" in label else ""
-        apt_rank = next(
-            (i for i, key in enumerate(target_keys) if key in apt_part),
-            999,
-        )
+        try:
+            apt_rank = order.index(apt_part)
+        except ValueError:
+            apt_rank = len(order)
         return (apt_rank, pyeong_rank.get(pyeong_part, 999), label)
 
     return sorted(labels, key=sort_key)
