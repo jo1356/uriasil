@@ -1430,6 +1430,38 @@ def update_cache(
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
 
+    def _flush_sale_frames(*, final: bool = False) -> None:
+        """force_rebuild 중에도 월별 수집분을 디스크에 누적 저장."""
+        nonlocal cached, new_frames
+        if not new_frames:
+            return
+        try:
+            new_df = enforce_strict_pyeong_on_dataframe(
+                pd.concat(new_frames, ignore_index=True)
+            )
+            if not new_df.empty:
+                cached = (
+                    pd.concat([cached, new_df], ignore_index=True)
+                    if not cached.empty
+                    else new_df
+                )
+                cached = cached.drop_duplicates(
+                    subset=[
+                        "조회지역코드",
+                        "조회계약년월",
+                        "아파트",
+                        "계약일자",
+                        "거래금액(만원)",
+                        "전용면적(㎡)",
+                        "층",
+                    ],
+                    keep="last",
+                )
+                save_cached_data(cached)
+            new_frames = []
+        except Exception as exc:
+            _log_row_parse_error("flush_sale_frames" if not final else "merge_all_frames", exc)
+
     for idx, (lawd_cd, deal_ymd) in enumerate(tasks, start=1):
         region = _region_label(lawd_cd, lawd_codes.index(lawd_cd))
         msg = f"{region} {deal_ymd[:4]}.{deal_ymd[4:]}월 수집 중..."
@@ -1453,19 +1485,11 @@ def update_cache(
         finally:
             time.sleep(API_SLEEP_SEC)
 
+        if force_rebuild and idx % 5 == 0:
+            _flush_sale_frames()
+
     if new_frames:
-        try:
-            new_df = enforce_strict_pyeong_on_dataframe(
-                pd.concat(new_frames, ignore_index=True)
-            )
-            if not new_df.empty:
-                cached = (
-                    pd.concat([cached, new_df], ignore_index=True)
-                    if not cached.empty
-                    else new_df
-                )
-        except Exception as exc:
-            _log_row_parse_error("merge_all_frames", exc)
+        _flush_sale_frames(final=True)
 
     if not cached.empty:
         try:

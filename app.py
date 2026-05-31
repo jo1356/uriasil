@@ -24,20 +24,16 @@ from data_service import (
     parse_target_pyeong,
     parse_targets,
     prepare_dashboard_data,
-    rebuild_cache_from_scratch,
+    refresh_local_cache_files,
     sort_chart_labels,
-    update_cache,
-    validate_service_key,
 )
 from rent_service import (
     load_cached_rent_data,
     prepare_rent_dashboard_data,
-    rebuild_rent_cache_from_scratch,
     rent_cache_status,
-    update_rent_cache,
 )
 
-_DATA_CACHE_VERSION = "v43_area_pyeong_44_mapping"
+_DATA_CACHE_VERSION = "v44_local_csv_gaepo127_sin107"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -1159,47 +1155,26 @@ def _render_sidebar(
         )
 
         st.divider()
-        st.subheader("📥 데이터 수집")
+        st.subheader("📥 데이터")
+        st.caption(
+            "대시보드는 저장소에 포함된 `all_combined_data.csv`·"
+            "`all_combined_rent_data.csv`를 읽습니다. "
+            "전체 API 재수집은 웹이 아닌 로컬에서 "
+            "`python fetch_data.py --rebuild` 로 실행하세요."
+        )
 
-        if st.button("🔄 데이터 업데이트", use_container_width=True, type="primary"):
+        if st.button("🔄 로컬 CSV 재처리 (API 호출 없음)", use_container_width=True):
             try:
-                validate_service_key()
-                progress = st.progress(0, text="준비 중...")
-                status_text = st.empty()
-
-                def on_progress(ratio: float, msg: str) -> None:
-                    progress.progress(min(ratio, 1.0), text=msg)
-                    status_text.caption(msg)
-
-                update_cache(on_progress)
-                update_rent_cache(on_progress)
+                with st.spinner("평형 규칙 재적용·data.csv 보충 병합 중..."):
+                    stats = refresh_local_cache_files(import_supplemental=True)
                 _clear_data_caches()
-                progress.progress(1.0, text="완료!")
-                st.success("매매·전월세 업데이트 완료")
+                st.success(
+                    f"재처리 완료 — 매매 {stats['sale_rows']:,}건 / "
+                    f"전월세 {stats['rent_rows']:,}건"
+                )
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
-
-        if st.button("♻️ 캐시 초기화 후 전체 재수집", use_container_width=True):
-            try:
-                validate_service_key()
-                progress = st.progress(0, text="캐시 삭제 중...")
-                status_text = st.empty()
-
-                def on_progress(ratio: float, msg: str) -> None:
-                    progress.progress(min(ratio, 1.0), text=msg)
-                    status_text.caption(msg)
-
-                rebuild_cache_from_scratch(on_progress)
-                rebuild_rent_cache_from_scratch(on_progress)
-                _clear_data_caches()
-                progress.progress(1.0, text="완료!")
-                st.success("매매·전월세 전체 재수집 완료")
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-
-        st.caption(f"{len(_as_list(config.LAWD_CD))}개 구역 · 누락 월만 추가 수집")
 
         st.divider()
         st.header("⚙️ 설정")

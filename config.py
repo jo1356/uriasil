@@ -12,7 +12,7 @@ REGION_NAME = ["강남구", "서초구", "송파구", "영등포구"]
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v6_area_pyeong_44_mapping"
+CRAWL_DATA_VERSION = "v7_full_rebuild_gaepo127_sin107"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
