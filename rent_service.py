@@ -18,7 +18,9 @@ from data_service import (
     ProgressCallback,
     _DERIVED_DASHBOARD_COLUMNS,
     _as_list,
+    _log_row_parse_error,
     _region_label,
+    _safe_assign_pyeong_group_for_row,
     add_pyeong_columns,
     assign_pyeong_group_for_cache,
     assign_pyeong_group_from_m2,
@@ -117,21 +119,25 @@ def compute_converted_jeonse_deposit(
 
 def classify_rent_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
     """면적 분류 후 환산 전세가를 계산해 반환. 비허용 면적은 폐기."""
-    classified = classify_row_at_ingest(row)
-    if classified is None:
-        return None
+    try:
+        classified = classify_row_at_ingest(row)
+        if classified is None:
+            return None
 
-    deposit = _parse_amount(classified.get("보증금(만원)", ""))
-    monthly = _parse_amount(classified.get("월세(만원)", ""))
-    converted = compute_converted_jeonse_deposit(deposit, monthly)
-    if converted is None:
-        return None
+        deposit = _parse_amount(classified.get("보증금(만원)", ""))
+        monthly = _parse_amount(classified.get("월세(만원)", ""))
+        converted = compute_converted_jeonse_deposit(deposit, monthly)
+        if converted is None:
+            return None
 
-    classified["보증금(만원)"] = str(deposit or 0)
-    classified["월세(만원)"] = str(monthly or 0)
-    classified["환산보증금(만원)"] = str(converted)
-    classified["거래금액(만원)"] = str(converted)
-    return classified
+        classified["보증금(만원)"] = str(deposit or 0)
+        classified["월세(만원)"] = str(monthly or 0)
+        classified["환산보증금(만원)"] = str(converted)
+        classified["거래금액(만원)"] = str(converted)
+        return classified
+    except Exception as exc:
+        _log_row_parse_error("classify_rent_ingest", exc)
+        return None
 
 
 def fetch_apt_rent_data(
@@ -173,12 +179,16 @@ def fetch_apt_rent_data(
         if not items:
             break
         for item in items:
-            row = _item_to_row(item)
-            if not row:
+            try:
+                row = _item_to_row(item)
+                if not row:
+                    continue
+                classified = classify_rent_row_at_ingest(row)
+                if classified:
+                    all_rows.append(classified)
+            except Exception as exc:
+                _log_row_parse_error("fetch_rent", exc)
                 continue
-            classified = classify_rent_row_at_ingest(row)
-            if classified:
-                all_rows.append(classified)
 
         total_count = _text(root.find(".//totalCount"))
         if total_count and page_no * page_size >= int(total_count):
@@ -218,12 +228,7 @@ def enforce_strict_pyeong_on_rent_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out = filter_new_market_rent_contracts(out)
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     out["평형그룹"] = out.apply(
-        lambda r: assign_pyeong_group_for_cache(
-            r["전용면적(㎡)"],
-            dong=r["법정동"],
-            apt=r["아파트"],
-            targets=targets,
-        ),
+        lambda r: _safe_assign_pyeong_group_for_row(r, targets=targets),
         axis=1,
     )
     out = out[out["평형그룹"].notna()].copy()

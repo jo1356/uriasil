@@ -91,6 +91,50 @@ def _as_list(value) -> list[str]:
     return [str(value).strip()]
 
 
+def _safe_str(value: object, default: str = "") -> str:
+    """NaN/None/비문자 → 안전한 str (매칭·contains 전처리용)."""
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if text.lower() in ("nan", "none", "<na>", "nat"):
+        return default
+    return text
+
+
+def _log_row_parse_error(context: str, exc: Exception) -> None:
+    print(f"Error parsing row ({context}): {exc}")
+
+
+def _safe_assign_pyeong_group_for_row(
+    row: pd.Series | dict[str, object],
+    targets: list[TargetDict] | None = None,
+) -> str | None:
+    """DataFrame 행 → 평형그룹. 오류 시 None 반환(수집 계속)."""
+    try:
+        getter = row.get if hasattr(row, "get") else lambda k, d="": row[k]  # type: ignore[index]
+        dong = _safe_str(getter("법정동", ""))
+        apt = _safe_str(getter("아파트", ""))
+        m2 = _parse_area_m2(getter("전용면적(㎡)", None))
+        if m2 is None:
+            return None
+        if targets is None:
+            targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+        return assign_pyeong_group_for_cache(
+            m2,
+            dong=dong,
+            apt=apt,
+            targets=targets,
+        )
+    except Exception as exc:
+        _log_row_parse_error("assign_pyeong", exc)
+        return None
+
+
 def parse_targets(raw: object) -> list[TargetDict]:
     if not isinstance(raw, (list, tuple)) or not raw:
         return []
@@ -258,19 +302,25 @@ def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
 
 def is_gaepo_woosung_apartment(dong: str, apt: str) -> bool:
     """개포우성 1·2차 — API: 개포우성1/2, 개포 우성 1 등, 법정동 대치동·개포동."""
-    dongs = getattr(config, "GAEPO_WOOSUNG_DONGS", None)
-    if dongs is None:
-        dongs = [str(getattr(config, "GAEPO_WOOSUNG_DONG", "개포동"))]
-    if not _dong_matches(dong, dongs):
+    try:
+        dongs = getattr(config, "GAEPO_WOOSUNG_DONGS", None)
+        if dongs is None:
+            dongs = [str(getattr(config, "GAEPO_WOOSUNG_DONG", "개포동"))]
+        dong_s = _safe_str(dong)
+        if not _dong_matches(dong_s, dongs):
+            return False
+        apt_text = _safe_str(apt)
+        if not apt_text:
+            return False
+        apt_norm = re.sub(r"\s+", "", apt_text)
+        gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
+        if apt_norm == gw_label.replace(" ", ""):
+            return True
+        if _GAEPO_WOOSUNG_APT_RE.search(apt_text):
+            return True
+        return "개포우성" in apt_norm
+    except Exception:
         return False
-    apt_text = str(apt).strip()
-    apt_norm = re.sub(r"\s+", "", apt_text)
-    gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
-    if apt_norm == gw_label.replace(" ", ""):
-        return True
-    if _GAEPO_WOOSUNG_APT_RE.search(apt_text):
-        return True
-    return "개포우성" in apt_norm
 
 
 def get_gaepo_woosung_area_rules() -> list[tuple[str, float, float]]:
@@ -284,9 +334,9 @@ def get_gaepo_woosung_area_rules() -> list[tuple[str, float, float]]:
 
 def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
     """개포우성 1,2차: 84~85㎡→24평형(31평 UI), 127~128.5㎡→34평형(44평 UI)."""
-    if area_m2 is None or pd.isna(area_m2):
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
         return None
-    m2 = float(area_m2)
     for label, lo, hi in get_gaepo_woosung_area_rules():
         if lo <= m2 <= hi:
             return label
@@ -295,19 +345,25 @@ def assign_gaepo_woosung_pyeong_group(area_m2: float) -> str | None:
 
 def is_sinhyundai_apartment(dong: str, apt: str) -> bool:
     """압구정동 신현대·현대9/11/12차(띄어쓰기·신현대9차 등 API 명칭 포함)."""
-    sh_dong = str(getattr(config, "SINHYUNDAI_DONG", "압구정동"))
-    if sh_dong not in str(dong):
-        return False
-    apt_text = str(apt).strip()
-    if apt_text == "신현대":
-        return True
-    if _SINHYUNDAI_APT_RE.search(apt_text):
-        return True
-    apt_norm = re.sub(r"\s+", "", apt_text)
-    for n in (9, 11, 12):
-        if apt_norm.startswith(f"신현대{n}차") or apt_norm.startswith(f"현대{n}차"):
+    try:
+        sh_dong = str(getattr(config, "SINHYUNDAI_DONG", "압구정동"))
+        dong_s = _safe_str(dong)
+        if sh_dong not in dong_s:
+            return False
+        apt_text = _safe_str(apt)
+        if not apt_text:
+            return False
+        if apt_text == "신현대":
             return True
-    return False
+        if _SINHYUNDAI_APT_RE.search(apt_text):
+            return True
+        apt_norm = re.sub(r"\s+", "", apt_text)
+        for n in (9, 11, 12):
+            if apt_norm.startswith(f"신현대{n}차") or apt_norm.startswith(f"현대{n}차"):
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def get_sinhyundai_area_rules() -> list[tuple[str, float, float]]:
@@ -321,9 +377,9 @@ def get_sinhyundai_area_rules() -> list[tuple[str, float, float]]:
 
 def assign_sinhyundai_pyeong_group(area_m2: float) -> str | None:
     """신현대: 107~109㎡→34평형(34평 UI)만."""
-    if area_m2 is None or pd.isna(area_m2):
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
         return None
-    m2 = float(area_m2)
     for label, lo, hi in get_sinhyundai_area_rules():
         if lo <= m2 <= hi:
             return label
@@ -351,9 +407,9 @@ def assign_pyeong_group_from_m2(
         return assign_gaepo_woosung_pyeong_group(area_m2)
     if is_sinhyundai_apartment(dong, apt):
         return assign_sinhyundai_pyeong_group(area_m2)
-    if area_m2 is None or pd.isna(area_m2):
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
         return None
-    m2 = float(area_m2)
     if 57.0 <= m2 < 63.0:
         return "24평형"
     if 82.0 <= m2 < 87.0:
@@ -369,22 +425,29 @@ def assign_pyeong_group_for_cache(
     targets: list[TargetDict] | None = None,
 ) -> str | None:
     """캐시 저장용 평형그룹. 삼부·잠실주공5·신반포2차는 전용 ㎡ 규칙 적용."""
-    if area_m2 is None or pd.isna(area_m2):
+    try:
+        m2 = _parse_area_m2(area_m2)
+        if m2 is None:
+            return None
+        dong_s = _safe_str(dong)
+        apt_s = _safe_str(apt)
+        if is_sambu_apartment(dong_s, apt_s):
+            return assign_sambu_pyeong_group(m2)
+        if is_jamsil_jugong5_apartment(dong_s, apt_s):
+            return assign_jamsil_jugong5_pyeong_group(m2)
+        if is_sinbanpo2_apartment(dong_s, apt_s):
+            return assign_sinbanpo2_pyeong_group(m2)
+        if is_gaepo_woosung_apartment(dong_s, apt_s):
+            return assign_gaepo_woosung_pyeong_group(m2)
+        if is_sinhyundai_apartment(dong_s, apt_s):
+            return assign_sinhyundai_pyeong_group(m2)
+        group = assign_pyeong_group_from_m2(m2, dong=dong_s, apt=apt_s)
+        if group is not None and is_allowed_area_m2(m2, group, dong=dong_s, apt=apt_s):
+            return group
         return None
-    if is_sambu_apartment(dong, apt):
-        return assign_sambu_pyeong_group(area_m2)
-    if is_jamsil_jugong5_apartment(dong, apt):
-        return assign_jamsil_jugong5_pyeong_group(area_m2)
-    if is_sinbanpo2_apartment(dong, apt):
-        return assign_sinbanpo2_pyeong_group(area_m2)
-    if is_gaepo_woosung_apartment(dong, apt):
-        return assign_gaepo_woosung_pyeong_group(area_m2)
-    if is_sinhyundai_apartment(dong, apt):
-        return assign_sinhyundai_pyeong_group(area_m2)
-    group = assign_pyeong_group_from_m2(area_m2, dong=dong, apt=apt)
-    if group is not None and is_allowed_area_m2(area_m2, group, dong=dong, apt=apt):
-        return group
-    return None
+    except Exception as exc:
+        _log_row_parse_error("pyeong_cache", exc)
+        return None
 
 
 def is_allowed_area_m2(
@@ -487,6 +550,31 @@ def format_chart_label(apt_name: str, pyeong_group: str) -> str:
     return f"{apt_name} ({pyeong_group})"
 
 
+def _safe_assign_pyeong_from_m2_row(row: pd.Series) -> str | None:
+    try:
+        return assign_pyeong_group_from_m2(
+            _parse_area_m2(row.get("전용면적(㎡)")),
+            dong=_safe_str(row.get("법정동", "")),
+            apt=resolve_apt_for_pyeong_rules(row),
+        )
+    except Exception as exc:
+        _log_row_parse_error("add_pyeong", exc)
+        return None
+
+
+def _safe_is_allowed_area_row(row: pd.Series) -> bool:
+    try:
+        return is_allowed_area_m2(
+            _parse_area_m2(row.get("전용면적(㎡)")),
+            _safe_str(row.get("평형그룹", "")),
+            dong=_safe_str(row.get("법정동", "")),
+            apt=resolve_apt_for_pyeong_rules(row),
+        )
+    except Exception as exc:
+        _log_row_parse_error("area_allowed", exc)
+        return False
+
+
 def add_pyeong_columns(df: pd.DataFrame) -> pd.DataFrame:
     """초정밀 ㎡ 구간으로 24·34평형만 남기고 나머지는 전부 삭제합니다."""
     if df.empty:
@@ -497,11 +585,7 @@ def add_pyeong_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     out["전용면적(㎡)"] = pd.to_numeric(out["전용면적(㎡)"], errors="coerce")
     out["평형그룹"] = out.apply(
-        lambda r: assign_pyeong_group_from_m2(
-            r["전용면적(㎡)"],
-            dong=r.get("법정동", ""),
-            apt=resolve_apt_for_pyeong_rules(r),
-        ),
+        lambda r: _safe_assign_pyeong_from_m2_row(r),
         axis=1,
     )
 
@@ -533,15 +617,7 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "전용면적(㎡)" in out.columns:
         out["전용면적(㎡)"] = pd.to_numeric(out["전용면적(㎡)"], errors="coerce")
         out = out[
-            out.apply(
-                lambda r: is_allowed_area_m2(
-                    r["전용면적(㎡)"],
-                    r["평형그룹"],
-                    dong=r.get("법정동", ""),
-                    apt=resolve_apt_for_pyeong_rules(r),
-                ),
-                axis=1,
-            )
+            out.apply(_safe_is_allowed_area_row, axis=1)
         ].copy()
 
     display = out["타겟명"] if "타겟명" in out.columns else out["아파트"]
@@ -593,41 +669,57 @@ def _parse_amount(value: str) -> float | None:
 
 
 def _parse_area_m2(value: object) -> float | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None:
         return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     cleaned = re.sub(r"[^\d.]", "", str(value).strip())
     if not cleaned:
         return None
     try:
-        return float(cleaned)
-    except ValueError:
+        result = float(cleaned)
+        if pd.isna(result):
+            return None
+        return result
+    except (TypeError, ValueError):
         return None
 
 
 def row_matches_crawl_target(row: dict[str, str] | pd.Series) -> bool:
     """국토부 API aptNm이 수집 대상(CRAWL_APARTMENT_API_NAMES·TARGET)인지."""
-    dong = str(row.get("법정동", ""))
-    apt = str(row.get("아파트", ""))
-    if (
-        is_gaepo_woosung_apartment(dong, apt)
-        or is_sinhyundai_apartment(dong, apt)
-        or is_sambu_apartment(dong, apt)
-        or is_jamsil_jugong5_apartment(dong, apt)
-        or is_sinbanpo2_apartment(dong, apt)
-    ):
-        return True
-    apt_norm = re.sub(r"\s+", "", apt.strip())
-    for name in getattr(config, "CRAWL_APARTMENT_API_NAMES", []):
-        n = re.sub(r"\s+", "", str(name))
-        if not n:
-            continue
-        if apt_norm == n or n in apt_norm or apt.strip() == str(name):
+    try:
+        dong = _safe_str(row.get("법정동", ""))  # type: ignore[union-attr]
+        apt = _safe_str(row.get("아파트", ""))  # type: ignore[union-attr]
+        if not apt:
+            return False
+        if (
+            is_gaepo_woosung_apartment(dong, apt)
+            or is_sinhyundai_apartment(dong, apt)
+            or is_sambu_apartment(dong, apt)
+            or is_jamsil_jugong5_apartment(dong, apt)
+            or is_sinbanpo2_apartment(dong, apt)
+        ):
             return True
-    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
-    if not targets:
+        apt_norm = re.sub(r"\s+", "", apt)
+        for name in getattr(config, "CRAWL_APARTMENT_API_NAMES", []):
+            n = re.sub(r"\s+", "", _safe_str(name))
+            if not n:
+                continue
+            if apt_norm == n or n in apt_norm or apt == _safe_str(name):
+                return True
+        targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+        if not targets:
+            return False
+        mini = pd.DataFrame(
+            [{"법정동": dong, "아파트": apt, "전용면적(㎡)": row.get("전용면적(㎡)", "")}]  # type: ignore[union-attr]
+        )
+        return not filter_by_targets(mini, targets).empty
+    except Exception as exc:
+        _log_row_parse_error("crawl_target_match", exc)
         return False
-    mini = pd.DataFrame([dict(row)])
-    return not filter_by_targets(mini, targets).empty
 
 
 def get_data_cache_fingerprint(*, app_cache_version: str = "") -> str:
@@ -707,57 +799,63 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
     area_col = "전용면적(㎡)" if "전용면적(㎡)" in raw.columns else "전용면적"
     rows: list[dict[str, object]] = []
     for _, r in raw.iterrows():
-        row_dict = {
-            "법정동": r.get("법정동", ""),
-            "아파트": r.get("아파트", ""),
-            "전용면적(㎡)": r.get(area_col, r.get("전용면적(㎡)")),
-        }
-        if not row_matches_crawl_target(row_dict):
-            continue
-        m2 = _parse_area_m2(row_dict.get("전용면적(㎡)"))
-        if m2 is None:
-            continue
-        group = assign_pyeong_group_for_cache(
-            m2,
-            dong=str(r.get("법정동", "")),
-            apt=str(r.get("아파트", "")),
-        )
-        if group is None:
-            continue
-        amount = _parse_amount(str(r.get("거래금액(만원)", "")))
-        if amount is None:
-            amount = _parse_amount(str(r.get("환산보증금(만원)", "")))
-        if amount is None:
-            continue
-        contract_date = str(r.get("계약일자", "")).strip()
-        deal_ym = str(r.get("조회계약년월", contract_date[:6] if len(contract_date) >= 6 else ""))
-        rows.append(
-            {
-                "아파트": str(r.get("아파트", "")),
-                "건축년도": r.get("건축년도", ""),
-                "계약기간": "",
-                "계약구분": "",
-                "계약일": str(r.get("계약일", "")),
-                "계약월": str(r.get("계약월", "")),
-                "계약년": str(r.get("계약년", "")),
-                "보증금(만원)": amount,
-                "전용면적(㎡)": m2,
-                "층": r.get("층", ""),
-                "지번": r.get("지번", ""),
-                "월세(만원)": 0.0,
-                "종전계약보증금": "",
-                "종전계약월세": "",
-                "지역코드": r.get("지역코드", r.get("조회지역코드", "11680")),
-                "법정동": r.get("법정동", ""),
-                "갱신요구권사용": "",
-                "평형그룹": group,
-                "환산보증금(만원)": amount,
-                "거래금액(만원)": amount,
-                "조회지역코드": str(r.get("조회지역코드", "11680")),
-                "조회계약년월": deal_ym,
-                "계약일자": contract_date,
+        try:
+            row_dict = {
+                "법정동": _safe_str(r.get("법정동", "")),
+                "아파트": _safe_str(r.get("아파트", "")),
+                "전용면적(㎡)": r.get(area_col, r.get("전용면적(㎡)")),
             }
-        )
+            if not row_matches_crawl_target(row_dict):
+                continue
+            m2 = _parse_area_m2(row_dict.get("전용면적(㎡)"))
+            if m2 is None:
+                continue
+            group = assign_pyeong_group_for_cache(
+                m2,
+                dong=row_dict["법정동"],
+                apt=row_dict["아파트"],
+            )
+            if group is None:
+                continue
+            amount = _parse_amount(str(r.get("거래금액(만원)", "")))
+            if amount is None:
+                amount = _parse_amount(str(r.get("환산보증금(만원)", "")))
+            if amount is None:
+                continue
+            contract_date = _safe_str(r.get("계약일자", ""))
+            deal_ym = _safe_str(
+                r.get("조회계약년월", contract_date[:6] if len(contract_date) >= 6 else "")
+            )
+            rows.append(
+                {
+                    "아파트": row_dict["아파트"],
+                    "건축년도": r.get("건축년도", ""),
+                    "계약기간": "",
+                    "계약구분": "",
+                    "계약일": _safe_str(r.get("계약일", "")),
+                    "계약월": _safe_str(r.get("계약월", "")),
+                    "계약년": _safe_str(r.get("계약년", "")),
+                    "보증금(만원)": amount,
+                    "전용면적(㎡)": m2,
+                    "층": r.get("층", ""),
+                    "지번": r.get("지번", ""),
+                    "월세(만원)": 0.0,
+                    "종전계약보증금": "",
+                    "종전계약월세": "",
+                    "지역코드": r.get("지역코드", r.get("조회지역코드", "11680")),
+                    "법정동": row_dict["법정동"],
+                    "갱신요구권사용": "",
+                    "평형그룹": group,
+                    "환산보증금(만원)": amount,
+                    "거래금액(만원)": amount,
+                    "조회지역코드": _safe_str(r.get("조회지역코드", "11680")),
+                    "조회계약년월": deal_ym,
+                    "계약일자": contract_date,
+                }
+            )
+        except Exception as exc:
+            _log_row_parse_error("supplemental_csv", exc)
+            continue
 
     if not rows:
         return 0
@@ -826,24 +924,28 @@ def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
     API 행 1건 — CRAWL_APARTMENT_API_NAMES·TARGET_APARTMENTS 매칭 후 평형 부여.
     비허용 면적·비타겟 단지는 None(폐기).
     """
-    if not row_matches_crawl_target(row):
+    try:
+        if not row_matches_crawl_target(row):
+            return None
+        m2 = _parse_area_m2(row.get("전용면적(㎡)"))
+        if m2 is None:
+            return None
+        targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
+        group = assign_pyeong_group_for_cache(
+            m2,
+            dong=_safe_str(row.get("법정동", "")),
+            apt=_safe_str(row.get("아파트", "")),
+            targets=targets,
+        )
+        if group is None:
+            return None
+        row = dict(row)
+        row["전용면적(㎡)"] = str(m2)
+        row["평형그룹"] = group
+        return row
+    except Exception as exc:
+        _log_row_parse_error("classify_ingest", exc)
         return None
-    m2 = _parse_area_m2(row.get("전용면적(㎡)"))
-    if m2 is None:
-        return None
-    targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
-    group = assign_pyeong_group_for_cache(
-        m2,
-        dong=row.get("법정동", ""),
-        apt=row.get("아파트", ""),
-        targets=targets,
-    )
-    if group is None:
-        return None
-    row = dict(row)
-    row["전용면적(㎡)"] = str(m2)
-    row["평형그룹"] = group
-    return row
 
 
 # 캐시에 남아 있을 수 있는 파생 컬럼 — 항상 전용면적(㎡)에서 재계산
@@ -901,12 +1003,16 @@ def fetch_apt_trade_data(
         if not items:
             break
         for item in items:
-            row = _item_to_row(item)
-            if not row:
+            try:
+                row = _item_to_row(item)
+                if not row:
+                    continue
+                classified = classify_row_at_ingest(row)
+                if classified:
+                    all_rows.append(classified)
+            except Exception as exc:
+                _log_row_parse_error("fetch_trade", exc)
                 continue
-            classified = classify_row_at_ingest(row)
-            if classified:
-                all_rows.append(classified)
 
         total_count = _text(root.find(".//totalCount"))
         if total_count and page_no * page_size >= int(total_count):
@@ -942,6 +1048,10 @@ def normalize_raw_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             out["전용면적(㎡)"].astype(str).str.replace(",", "", regex=False),
             errors="coerce",
         )
+    if "법정동" in out.columns:
+        out["법정동"] = out["법정동"].fillna("").astype(str)
+    if "아파트" in out.columns:
+        out["아파트"] = out["아파트"].fillna("").astype(str)
     return out
 
 
@@ -949,15 +1059,14 @@ def enforce_strict_pyeong_on_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """전용면적(㎡) 기준으로 평형그룹을 재부여·검증하고 비허용 행을 삭제합니다."""
     if df.empty:
         return df
-    out = normalize_raw_dataframe(df)
+    try:
+        out = normalize_raw_dataframe(df)
+    except Exception as exc:
+        _log_row_parse_error("normalize_raw", exc)
+        return df.iloc[0:0].copy()
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     out["평형그룹"] = out.apply(
-        lambda r: assign_pyeong_group_for_cache(
-            r["전용면적(㎡)"],
-            dong=r["법정동"],
-            apt=r["아파트"],
-            targets=targets,
-        ),
+        lambda r: _safe_assign_pyeong_group_for_row(r, targets=targets),
         axis=1,
     )
     return out[out["평형그룹"].notna()].copy()
@@ -970,20 +1079,29 @@ def clear_cache_file() -> None:
 
 def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
     """타겟 단지 행 매칭 (exact_name·번들 매칭·regex 유연화)."""
+    if not {"법정동", "아파트"}.issubset(df.columns):
+        return pd.Series(False, index=df.index)
+    dong_col = df["법정동"].fillna("").astype(str)
+    apt_series = df["아파트"].fillna("").astype(str).str.strip()
     if target.get("match_all_gaepo_woosung"):
-        return df.apply(
-            lambda r: is_gaepo_woosung_apartment(r["법정동"], r["아파트"]),
-            axis=1,
+        return pd.Series(
+            [
+                is_gaepo_woosung_apartment(d, a)
+                for d, a in zip(dong_col, apt_series, strict=False)
+            ],
+            index=df.index,
         )
     if target.get("match_all_sinhyundai"):
-        return df.apply(
-            lambda r: is_sinhyundai_apartment(r["법정동"], r["아파트"]),
-            axis=1,
+        return pd.Series(
+            [
+                is_sinhyundai_apartment(d, a)
+                for d, a in zip(dong_col, apt_series, strict=False)
+            ],
+            index=df.index,
         )
     dong = target["dong"]
     name = target["name"]
-    dong_mask = df["법정동"].astype(str).str.contains(dong, case=False, na=False)
-    apt_series = df["아파트"].astype(str).str.strip()
+    dong_mask = dong_col.str.contains(dong, case=False, na=False)
     label = str(target.get("label") or "").strip()
     if target.get("exact_name") is True:
         apt_mask = apt_series == name
@@ -1105,23 +1223,29 @@ def update_cache(
         time.sleep(API_SLEEP_SEC)
 
     if new_frames:
-        new_df = enforce_strict_pyeong_on_dataframe(
-            pd.concat(new_frames, ignore_index=True)
-        )
-        if not new_df.empty:
-            cached = (
-                pd.concat([cached, new_df], ignore_index=True)
-                if not cached.empty
-                else new_df
+        try:
+            new_df = enforce_strict_pyeong_on_dataframe(
+                pd.concat(new_frames, ignore_index=True)
             )
+            if not new_df.empty:
+                cached = (
+                    pd.concat([cached, new_df], ignore_index=True)
+                    if not cached.empty
+                    else new_df
+                )
+        except Exception as exc:
+            _log_row_parse_error("merge_all_frames", exc)
 
     if not cached.empty:
-        cached = enforce_strict_pyeong_on_dataframe(cached)
-        cached = cached.drop_duplicates(
-            subset=["조회지역코드", "조회계약년월", "아파트", "계약일자", "거래금액(만원)", "전용면적(㎡)", "층"],
-            keep="last",
-        )
-        save_cached_data(cached)
+        try:
+            cached = enforce_strict_pyeong_on_dataframe(cached)
+            cached = cached.drop_duplicates(
+                subset=["조회지역코드", "조회계약년월", "아파트", "계약일자", "거래금액(만원)", "전용면적(㎡)", "층"],
+                keep="last",
+            )
+            save_cached_data(cached)
+        except Exception as exc:
+            _log_row_parse_error("save_sale_cache", exc)
 
     # 월 슬롯이 최신이어도 평형 규칙·보충 CSV 반영 (대시보드 '최신 캐시' 무변화 버그 방지)
     reprocess_sale_cache()
