@@ -244,8 +244,7 @@ def _filter_by_period(df: pd.DataFrame, start_d: date, end_d: date) -> pd.DataFr
 
 
 def _render_roi_metrics(roi: dict, trade_count: int) -> None:
-    """슬라이더 구간 절대값 수익률 — 큰 글씨로 표시."""
-    st.divider()
+    """슬라이더 구간 절대값 수익률."""
     st.subheader("구간 수익률")
     st.markdown(
         f"**{roi['first_label']}** → **{roi['last_label']}** "
@@ -253,20 +252,16 @@ def _render_roi_metrics(roi: dict, trade_count: int) -> None:
     )
     col_krw, col_usd = st.columns(2)
     with col_krw:
-        st.markdown(
-            f'<p style="font-size:0.95rem;color:#64748b;margin-bottom:0.25rem;">'
-            f"원화 변동</p>"
-            f'<p style="font-size:2rem;font-weight:700;margin:0;line-height:1.2;">'
-            f"{roi['krw_text']}</p>",
-            unsafe_allow_html=True,
+        st.metric(
+            label="원화 변동",
+            value=roi["krw_text"],
+            help="구간 내 시간순 최초 거래 대비 최종 거래",
         )
     with col_usd:
-        st.markdown(
-            f'<p style="font-size:0.95rem;color:#64748b;margin-bottom:0.25rem;">'
-            f"달러 변동</p>"
-            f'<p style="font-size:2rem;font-weight:700;margin:0;line-height:1.2;">'
-            f"{roi['usd_text']}</p>",
-            unsafe_allow_html=True,
+        st.metric(
+            label="달러 변동",
+            value=roi["usd_text"],
+            help="동일 구간 달러 환산가 변동",
         )
 
 
@@ -294,32 +289,33 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
         st.session_state[_PERIOD_SLIDER_KEY] = default_range
 
     start_d, end_d = st.session_state[_PERIOD_SLIDER_KEY]
-    chart_period = _filter_by_period(df, start_d, end_d)
+    period = _filter_by_period(df, start_d, end_d)
 
+    # 1) 구간 수익률 — 최상단
+    if period.empty:
+        st.subheader("구간 수익률")
+        st.info("선택한 기간에 거래가 없습니다. 아래 슬라이더 구간을 조정해 주세요.")
+    else:
+        _render_roi_metrics(_compute_period_roi(period), len(period))
+
+    # 2) 통합 지수 차트 — 중간
     st.plotly_chart(
-        build_usd_index_chart(chart_period, index_base_date=index_base),
+        build_usd_index_chart(period, index_base_date=index_base),
         use_container_width=True,
         key="usd_asset_index_chart",
     )
-
     st.caption(
         f"{TARGET_APT} · {TARGET_PYEONG} · "
         f"지수 기준: {index_base} (2014년 최초 거래=100) · yfinance 환율 병합"
     )
 
-    start_d, end_d = st.slider(
+    # 3) 기간 슬라이더 — 최하단
+    st.slider(
         "분석 기간",
         min_value=min_d,
         max_value=max_d,
         value=(start_d, end_d),
         format="YYYY-MM-DD",
         key=_PERIOD_SLIDER_KEY,
-        help="선택 구간의 차트·수익률이 함께 갱신됩니다.",
+        help="선택 구간의 수익률·차트가 함께 갱신됩니다.",
     )
-
-    period = _filter_by_period(df, start_d, end_d)
-    if period.empty:
-        st.info("선택한 기간에 거래가 없습니다. 슬라이더 구간을 조정해 주세요.")
-        return
-
-    _render_roi_metrics(_compute_period_roi(period), len(period))
