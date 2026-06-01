@@ -1321,18 +1321,6 @@ def _render_sidebar(
             except Exception as exc:
                 st.error(str(exc))
 
-        if st.button(
-            "♻️ 캐시 초기화 후 전체 재수집",
-            use_container_width=True,
-            disabled=update_disabled,
-        ):
-            try:
-                validate_service_key()
-                _start_subprocess_fetch("--rebuild")
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-
         st.caption(
             f"{len(_as_list(config.LAWD_CD))}개 구역 · "
             "누락 월 보충 + 최근 2개월 자동 재수집"
@@ -1362,6 +1350,20 @@ def _render_sidebar(
             )
         else:
             st.warning("전월세 캐시 없음")
+
+        st.divider()
+        st.caption("⚠️ 전체 재수집 (오래 걸림)")
+        if st.button(
+            "♻️ 캐시 초기화 후 전체 재수집",
+            use_container_width=True,
+            disabled=update_disabled,
+        ):
+            try:
+                validate_service_key()
+                _start_subprocess_fetch("--rebuild")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
 
     return selected_series
 
