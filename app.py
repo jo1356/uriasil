@@ -1087,7 +1087,7 @@ def _render_sidebar_series_selector(
 def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     st.caption(
         "기준/비교 단지를 각각 선택하면, **가장 가까운 과거 거래일** 기준으로 "
-        "매매가 갭 차액(기준-비교) 추이를 계산합니다."
+        "가격 비율(%) 또는 갭 차액(억) 추이를 확인할 수 있습니다."
     )
     if sale_df.empty:
         st.info("매매 데이터가 없어 갭 분석을 표시할 수 없습니다.")
@@ -1192,46 +1192,92 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         st.warning("가까운 과거 거래일 기준으로 매칭된 비교 데이터가 없습니다.")
         return
 
+    merged["기준가(억)"] = merged["기준매매가(만원)"] / 10000.0
+    merged["비교가(억)"] = merged["비교매매가(만원)"] / 10000.0
     merged["갭차액(만원)"] = merged["기준매매가(만원)"] - merged["비교매매가(만원)"]
-    # 원본 단위(만원) → 억 단위 실수로 변환
     merged["갭차액(억)"] = merged["갭차액(만원)"] / 10000.0
+    merged["가격비율(%)"] = (
+        merged["기준매매가(만원)"] / merged["비교매매가(만원)"] * 100.0
+    ).where(merged["비교매매가(만원)"] > 0)
+
     mean_gap_eok = float(merged["갭차액(억)"].mean())
-    merged["갭차액(억표기)"] = merged["갭차액(억)"].apply(_eok_str)
+    mean_ratio_pct = float(merged["가격비율(%)"].mean())
+
+    gap_mode = st.radio(
+        "분석 모드",
+        options=["비율 기반 (%)", "갭 금액 기반 (억)"],
+        horizontal=True,
+        key="gap_analysis_mode",
+    )
+    ratio_mode = gap_mode.startswith("비율")
+
+    tooltip_custom = pd.DataFrame(
+        {
+            "base_eok": merged["기준가(억)"].map(lambda v: f"{v:.1f}억"),
+            "compare_eok": merged["비교가(억)"].map(lambda v: f"{v:.1f}억"),
+            "ratio_pct": merged["가격비율(%)"].map(lambda v: f"{v:.1f}%"),
+            "gap_eok": merged["갭차액(억)"].map(lambda v: f"{v:.1f}억"),
+            "base_date": merged["기준계약일자"].astype(str),
+            "compare_date": merged["비교계약일자"].astype(str),
+        }
+    ).to_numpy()
+    unified_hover = (
+        "기준 거래일: %{customdata[4]}<br>"
+        "비교 최근 거래일: %{customdata[5]}<br>"
+        "기준 단지 가격: %{customdata[0]}<br>"
+        "비교 단지 가격: %{customdata[1]}<br>"
+        "현재 가격 비율: %{customdata[2]}<br>"
+        "현재 갭 차액: %{customdata[3]}<extra></extra>"
+    )
+
+    if ratio_mode:
+        y_series = merged["가격비율(%)"]
+        mean_y = mean_ratio_pct
+        trace_name = "가격 비율"
+        y_axis_title = "가격 비율 (%)"
+        y_tickformat = ".1f"
+        y_ticksuffix = "%"
+        mean_label = f"역사적 평균 비율: {mean_ratio_pct:.1f}%"
+    else:
+        y_series = merged["갭차액(억)"]
+        mean_y = mean_gap_eok
+        trace_name = "갭 차액"
+        y_axis_title = "갭 차액 (억)"
+        y_tickformat = ".1f"
+        y_ticksuffix = "억"
+        mean_label = f"역사적 평균 갭: {_eok_str(mean_gap_eok)}"
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=merged["기준일"],
-            y=merged["갭차액(억)"],
+            y=y_series,
             mode="lines+markers",
-            name="갭 차액",
+            name=trace_name,
             line=dict(width=1.5, color="#2563eb"),
             marker=dict(size=5, color="#2563eb"),
-            customdata=merged[["갭차액(억표기)", "기준계약일자", "비교계약일자"]].to_numpy(),
-            hovertemplate=(
-                "갭 차액: %{customdata[0]}<br>"
-                "기준 거래일: %{customdata[1]}<br>"
-                "비교 최근 거래일: %{customdata[2]}<extra></extra>"
-            ),
+            customdata=tooltip_custom,
+            hovertemplate=unified_hover,
         )
     )
     fig.add_hline(
-        y=mean_gap_eok,
+        y=mean_y,
         line_dash="dash",
         line_color="#ef4444",
-        annotation_text=f"역사적 평균 갭: {_eok_str(mean_gap_eok)}",
+        annotation_text=mean_label,
         annotation_position="top left",
     )
     fig.update_layout(
         template="plotly_white",
         title=(
             f"{base_apt} ({_format_pyeong_for_apt(base_apt, base_pyeong)}) vs "
-            f"{compare_apt} ({_format_pyeong_for_apt(compare_apt, compare_pyeong)}) 갭 추이"
+            f"{compare_apt} ({_format_pyeong_for_apt(compare_apt, compare_pyeong)}) "
+            f"{'비율' if ratio_mode else '갭'} 추이"
         ),
         height=600,
         hovermode="x unified",
         margin=dict(l=48, r=24, t=72, b=88),
-        yaxis=dict(title="갭 차액", tickformat=".1f", ticksuffix="억"),
+        yaxis=dict(title=y_axis_title, tickformat=y_tickformat, ticksuffix=y_ticksuffix),
         xaxis=dict(
             title="",
             tickformat="%Y-%m",
@@ -1239,7 +1285,8 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
             rangeslider=dict(thickness=0.08, bgcolor="#f1f5f9"),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True, key="sale_gap_chart")
+    mode_key = "ratio" if ratio_mode else "gap"
+    st.plotly_chart(fig, use_container_width=True, key=f"sale_gap_chart_{mode_key}")
 
     # 차트 아래: 기준/비교 거래 내역 좌우 분할
     base_table_df = sale_df[apt_mask_base & (sale_df["평형그룹"] == base_pyeong)].copy()
