@@ -9,12 +9,13 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 MANWON_PER_EOK = 10_000
+USD_PER_MAN = 10_000  # 만 달러 = 10,000 USD
 TARGET_APT = "래미안퍼스티지"
 TARGET_PYEONG = "34평형"
 FX_START = "2014-01-01"
+INDEX_BASE_YEAR = 2014
 
 
 @st.cache_data(ttl=3600, show_spinner="원/달러 환율 데이터 불러오는 중...")
@@ -55,8 +56,7 @@ def filter_raemian_firstige_34(sale_df: pd.DataFrame) -> pd.DataFrame:
     mask = sale_df[apt_col].astype(str).str.contains(TARGET_APT, na=False)
     if "평형그룹" in sale_df.columns:
         mask &= sale_df["평형그룹"].astype(str) == TARGET_PYEONG
-    out = sale_df.loc[mask].copy()
-    return out
+    return sale_df.loc[mask].copy()
 
 
 def _parse_contract_datetime(series: pd.Series) -> pd.Series:
@@ -64,12 +64,29 @@ def _parse_contract_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(s, format="%Y%m%d", errors="coerce")
 
 
+def _attach_value_indices(df: pd.DataFrame) -> pd.DataFrame:
+    """2014년 최초 거래 가격을 원화·달러 지수 100 기준으로 설정."""
+    out = df.copy()
+    y2014 = out[out["contract_dt"].dt.year == INDEX_BASE_YEAR].sort_values("contract_dt")
+    base = y2014.iloc[0] if not y2014.empty else out.sort_values("contract_dt").iloc[0]
+
+    krw0 = float(base["거래금액(만원)"])
+    usd0 = float(base["달러환산가(USD)"])
+    manwon = pd.to_numeric(out["거래금액(만원)"], errors="coerce")
+    usd = pd.to_numeric(out["달러환산가(USD)"], errors="coerce")
+
+    out["원화지수"] = (manwon / krw0 * 100.0) if krw0 else 100.0
+    out["달러지수"] = (usd / usd0 * 100.0) if usd0 else 100.0
+    out["지수기준일"] = base["계약일자_표시"]
+    return out
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def build_raemian_usd_series(
     sale_df: pd.DataFrame,
     _data_file_fp: str = "",
 ) -> pd.DataFrame:
-    """매매 데이터 + 환율 병합 + 달러 환산가."""
+    """매매 데이터 + 환율 병합 + 달러 환산가 + 가치 지수."""
     base = filter_raemian_firstige_34(sale_df)
     if base.empty:
         return base
@@ -98,7 +115,7 @@ def build_raemian_usd_series(
     out["거래금액(원)"] = pd.to_numeric(out["거래금액(만원)"], errors="coerce") * MANWON_PER_EOK
     out["달러환산가(USD)"] = out["거래금액(원)"] / out["krw_per_usd"]
     out["계약일자_표시"] = out["contract_dt"].dt.strftime("%Y-%m-%d")
-    return out
+    return _attach_value_indices(out)
 
 
 def _format_krw_delta(manwon_delta: float, pct: float) -> str:
@@ -115,7 +132,7 @@ def _format_usd_delta(usd_delta: float, pct: float) -> str:
 
 
 def _compute_period_roi(period_df: pd.DataFrame) -> dict:
-    """구간 내 최초·최종 거래 기준 수익률."""
+    """구간 내 최초·최종 거래 기준 절대값 수익률."""
     if period_df.empty or len(period_df) < 1:
         return {}
     ordered = period_df.sort_values("contract_dt")
@@ -131,8 +148,6 @@ def _compute_period_roi(period_df: pd.DataFrame) -> dict:
     usd_pct = ((u1 / u0) - 1.0) * 100.0 if u0 else 0.0
 
     return {
-        "first_date": first["contract_dt"],
-        "last_date": last["contract_dt"],
         "krw_text": _format_krw_delta(m1 - m0, krw_pct),
         "usd_text": _format_usd_delta(u1 - u0, usd_pct),
         "first_label": first["계약일자_표시"],
@@ -140,83 +155,83 @@ def _compute_period_roi(period_df: pd.DataFrame) -> dict:
     }
 
 
-def build_usd_dual_axis_chart(period_df: pd.DataFrame) -> go.Figure:
-    """원화(억)·달러($만) 듀얼 Y축 차트."""
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+def _tooltip_rows(period_df: pd.DataFrame) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for _, row in period_df.iterrows():
+        manwon = float(row["거래금액(만원)"])
+        usd = float(row["달러환산가(USD)"])
+        rows.append(
+            [
+                str(row["계약일자_표시"]),
+                f"{manwon / MANWON_PER_EOK:.1f}억",
+                f"${usd / USD_PER_MAN:.1f}만",
+                f"{float(row['원화지수']):.1f}",
+                f"{float(row['달러지수']):.1f}",
+                f"환율 {float(row['krw_per_usd']):,.2f}원/USD",
+            ]
+        )
+    return rows
+
+
+def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "") -> go.Figure:
+    """단일 Y축 — 원화·달러 가치 지수(2014=100), 툴팁은 절대 금액."""
+    title_suffix = f" (기준: {index_base_date})" if index_base_date else ""
+    fig = go.Figure()
+
     if period_df.empty:
         fig.update_layout(
-            title=f"{TARGET_APT} {TARGET_PYEONG} — 원화 vs 달러 환산 매매가",
+            title=f"{TARGET_APT} {TARGET_PYEONG} — 가치 지수{title_suffix}",
             height=700,
         )
         fig.update_xaxes(title_text="계약일", rangeslider_visible=False)
+        fig.update_yaxes(title_text="가치 지수 (2014=100)")
         return fig
 
     x = period_df["contract_dt"]
-    manwon = pd.to_numeric(period_df["거래금액(만원)"], errors="coerce")
-    usd = pd.to_numeric(period_df["달러환산가(USD)"], errors="coerce")
-    eok = manwon / MANWON_PER_EOK
-    usd_10k = usd / 10_000
-
-    custom = [
-        [
-            str(row["계약일자_표시"]),
-            f"{float(row['거래금액(만원)']):,.0f}만원 "
-            f"({float(row['거래금액(만원)']) / MANWON_PER_EOK:.1f}억)",
-            f"${float(row['달러환산가(USD)']):,.0f}",
-            f"환율 {float(row['krw_per_usd']):,.2f}원/USD",
-        ]
-        for _, row in period_df.iterrows()
-    ]
+    custom = _tooltip_rows(period_df)
+    krw_hover = (
+        "%{customdata[0]}<br>"
+        "원화: %{customdata[1]}<br>"
+        "달러: %{customdata[2]}<br>"
+        "원화 지수: %{customdata[3]}<br>"
+        "달러 지수: %{customdata[4]}<br>"
+        "%{customdata[5]}<extra></extra>"
+    )
 
     fig.add_trace(
         go.Scatter(
             x=x,
-            y=eok,
+            y=period_df["원화지수"],
             mode="lines+markers",
-            name="원화 (억원)",
+            name="원화 지수",
             line=dict(color="#2563eb", width=2),
             marker=dict(size=6),
             customdata=custom,
-            hovertemplate=(
-                "%{customdata[0]}<br>"
-                "원화: %{customdata[1]}<br>"
-                "달러: %{customdata[2]}<br>"
-                "%{customdata[3]}<extra></extra>"
-            ),
+            hovertemplate=krw_hover,
         ),
-        secondary_y=False,
     )
-
     fig.add_trace(
         go.Scatter(
             x=x,
-            y=usd_10k,
+            y=period_df["달러지수"],
             mode="lines+markers",
-            name="달러 ($만)",
+            name="달러 지수",
             line=dict(color="#dc2626", width=2, dash="dot"),
             marker=dict(size=6),
             customdata=custom,
-            hovertemplate=(
-                "%{customdata[0]}<br>"
-                "원화: %{customdata[1]}<br>"
-                "달러: %{customdata[2]}<br>"
-                "%{customdata[3]}<extra></extra>"
-            ),
+            hovertemplate=krw_hover,
         ),
-        secondary_y=True,
     )
 
     fig.update_layout(
-        title=f"{TARGET_APT} {TARGET_PYEONG} — 원화 vs 달러 환산 매매가",
+        title=f"{TARGET_APT} {TARGET_PYEONG} — 가치 지수 (2014=100){title_suffix}",
         height=700,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(l=60, r=60, t=80, b=50),
     )
     fig.update_xaxes(title_text="계약일", rangeslider_visible=False)
-    fig.update_yaxes(title_text="원화 (억원)", secondary_y=False, tickformat=".1f")
-    fig.update_yaxes(title_text="달러 ($만)", secondary_y=True, tickformat=".0f")
-
+    fig.update_yaxes(title_text="가치 지수 (2014=100)", tickformat=".0f")
     return fig
 
 
@@ -226,6 +241,33 @@ _PERIOD_SLIDER_KEY = "usd_asset_period_range"
 def _filter_by_period(df: pd.DataFrame, start_d: date, end_d: date) -> pd.DataFrame:
     mask = (df["contract_dt"].dt.date >= start_d) & (df["contract_dt"].dt.date <= end_d)
     return df.loc[mask].copy()
+
+
+def _render_roi_metrics(roi: dict, trade_count: int) -> None:
+    """슬라이더 구간 절대값 수익률 — 큰 글씨로 표시."""
+    st.divider()
+    st.subheader("구간 수익률")
+    st.markdown(
+        f"**{roi['first_label']}** → **{roi['last_label']}** "
+        f"({trade_count:,}건)"
+    )
+    col_krw, col_usd = st.columns(2)
+    with col_krw:
+        st.markdown(
+            f'<p style="font-size:0.95rem;color:#64748b;margin-bottom:0.25rem;">'
+            f"원화 변동</p>"
+            f'<p style="font-size:2rem;font-weight:700;margin:0;line-height:1.2;">'
+            f"{roi['krw_text']}</p>",
+            unsafe_allow_html=True,
+        )
+    with col_usd:
+        st.markdown(
+            f'<p style="font-size:0.95rem;color:#64748b;margin-bottom:0.25rem;">'
+            f"달러 변동</p>"
+            f'<p style="font-size:2rem;font-weight:700;margin:0;line-height:1.2;">'
+            f"{roi['usd_text']}</p>",
+            unsafe_allow_html=True,
+        )
 
 
 def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> None:
@@ -243,6 +285,7 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
         )
         return
 
+    index_base = str(df["지수기준일"].iloc[0]) if "지수기준일" in df.columns else ""
     min_d: date = df["contract_dt"].min().date()
     max_d: date = df["contract_dt"].max().date()
     default_range = (min_d, max_d)
@@ -253,19 +296,17 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
     start_d, end_d = st.session_state[_PERIOD_SLIDER_KEY]
     chart_period = _filter_by_period(df, start_d, end_d)
 
-    # 1) 차트 최상단
     st.plotly_chart(
-        build_usd_dual_axis_chart(chart_period),
+        build_usd_index_chart(chart_period, index_base_date=index_base),
         use_container_width=True,
-        key="usd_asset_dual_chart",
+        key="usd_asset_index_chart",
     )
 
     st.caption(
         f"{TARGET_APT} · {TARGET_PYEONG} · "
-        "원/달러 환율(yfinance) 계약일 기준 병합"
+        f"지수 기준: {index_base} (2014년 최초 거래=100) · yfinance 환율 병합"
     )
 
-    # 2) 기간 슬라이더 — 차트 바로 아래
     start_d, end_d = st.slider(
         "분석 기간",
         min_value=min_d,
@@ -277,31 +318,8 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
     )
 
     period = _filter_by_period(df, start_d, end_d)
-
     if period.empty:
         st.info("선택한 기간에 거래가 없습니다. 슬라이더 구간을 조정해 주세요.")
         return
 
-    roi = _compute_period_roi(period)
-
-    # 3) 수익률 — 최하단
-    st.divider()
-    st.subheader("구간 수익률")
-    st.markdown(
-        f"**{roi['first_label']}** → **{roi['last_label']}** "
-        f"({len(period):,}건)"
-    )
-
-    col_krw, col_usd = st.columns(2)
-    with col_krw:
-        st.metric(
-            label="원화 변동",
-            value=roi["krw_text"],
-            help="구간 내 시간순 최초 거래 대비 최종 거래 (만원 → 억원 표기)",
-        )
-    with col_usd:
-        st.metric(
-            label="달러 변동",
-            value=roi["usd_text"],
-            help="동일 구간 달러 환산가 변동",
-        )
+    _render_roi_metrics(_compute_period_roi(period), len(period))

@@ -483,28 +483,24 @@ def _init_incremental_update_session() -> None:
         st.session_state.incremental_update_pid = None
 
 
+_UPDATE_SPINNER_MSG = "최근 2개월 누락 데이터를 확인하고 수집 중입니다..."
+
+
 def _start_subprocess_fetch(*extra_args: str) -> None:
     """Streamlit과 분리된 OS 프로세스에서 fetch_data.py 실행."""
-    from update_status import UPDATE_LOG_FILE, reset_update_status
+    from update_status import reset_update_status
 
-    reset_update_status("별도 프로세스에서 수집을 시작합니다...")
-    log_path = UPDATE_LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path, "w", encoding="utf-8")
+    reset_update_status(_UPDATE_SPINNER_MSG)
     cmd = [sys.executable, "-u", str(_PROJECT_DIR / "fetch_data.py"), *extra_args]
     proc = subprocess.Popen(
         cmd,
         cwd=str(_PROJECT_DIR),
         env=_subprocess_env_with_service_key(),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    log_file.close()
     st.session_state.incremental_update_pid = proc.pid
     st.session_state.incremental_update_running = True
-
-
-_UPDATE_SPINNER_MSG = "최근 2개월 누락 데이터를 확인하고 수집 중입니다..."
 
 
 def _poll_incremental_update() -> None:

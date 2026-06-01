@@ -88,7 +88,7 @@ def main() -> None:
         print(line, flush=True)
         write_update_status(ratio, msg, running=True, done=False)
 
-    reset_update_status("국토부 API 차분 수집 시작...")
+    reset_update_status("최근 2개월 누락 데이터를 확인하고 수집 중입니다...")
 
     try:
         if args.rent_only:

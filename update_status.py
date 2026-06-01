@@ -43,6 +43,7 @@ def write_update_status(
 def reset_update_status(
     message: str = "최근 2개월 누락 데이터를 확인하고 수집 중입니다...",
 ) -> None:
+    """수집 시작 — UI에는 스피너 문구만 노출."""
     write_update_status(0.0, message, running=True, done=False, error=None)
 
 
