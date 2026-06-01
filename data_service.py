@@ -1488,7 +1488,18 @@ def update_cache(
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
 
-    def _flush_sale_frames(*, final: bool = False) -> None:
+    try:
+        print(
+            f"[START] [매매] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '누락분만'})",
+            flush=True,
+        )
+        for i, cd in enumerate(lawd_codes):
+            print(f"  - {_region_label(cd, i)} ({cd})", flush=True)
+    except Exception:
+        pass
+
+    def _flush_sale_frames(*, final: bool = False, reason: str = "") -> None:
         """force_rebuild 중에도 월별 수집분을 디스크에 누적 저장."""
         nonlocal cached, new_frames
         if not new_frames:
@@ -1517,6 +1528,14 @@ def update_cache(
                 )
                 save_cached_data(cached)
             new_frames = []
+            if reason:
+                try:
+                    print(
+                        f"[SAVE] [매매] 중간 저장 ({reason}) - 누적 {len(cached):,}건 -> sales_data.csv",
+                        flush=True,
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             _log_row_parse_error("flush_sale_frames" if not final else "merge_all_frames", exc)
 
@@ -1543,11 +1562,15 @@ def update_cache(
         finally:
             time.sleep(API_SLEEP_SEC)
 
-        if force_rebuild and idx % 5 == 0:
-            _flush_sale_frames()
+        next_lawd = tasks[idx][0] if idx < len(tasks) else None
+        if force_rebuild and next_lawd is not None and next_lawd != lawd_cd:
+            _flush_sale_frames(reason=f"{region} 완료")
+
+        if force_rebuild and idx % 10 == 0:
+            _flush_sale_frames(reason=f"{idx}/{total_tasks} 슬롯")
 
     if new_frames:
-        _flush_sale_frames(final=True)
+        _flush_sale_frames(final=True, reason="최종 병합")
 
     if not cached.empty:
         try:

@@ -33,6 +33,15 @@ def _print_crawl_targets() -> None:
         print(f"    - {name}")
 
 
+def _print_region_targets() -> None:
+    lawd_codes = config.LAWD_CD if isinstance(config.LAWD_CD, list) else [config.LAWD_CD]
+    region_names = getattr(config, "REGION_NAME", [])
+    print(f"  수집 지역 ({len(lawd_codes)}개 구, 2014~현재 전 월 순회):")
+    for i, code in enumerate(lawd_codes):
+        label = region_names[i] if i < len(region_names) else code
+        print(f"    - {label} ({code})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="국토부 아파트 실거래·전월세 수집")
     parser.add_argument(
@@ -54,6 +63,7 @@ def main() -> None:
 
     print("=" * 60)
     print("  fetch_data.py - 국토부 API 수집")
+    _print_region_targets()
     _print_crawl_targets()
     print("=" * 60)
 

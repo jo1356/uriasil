@@ -466,6 +466,17 @@ def update_rent_cache(
     new_frames: list[pd.DataFrame] = []
     prev_flush_year: str | None = None
 
+    try:
+        print(
+            f"[START] [전월세] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '누락분만'})",
+            flush=True,
+        )
+        for i, cd in enumerate(lawd_codes):
+            print(f"  - {_region_label(cd, i)} ({cd})", flush=True)
+    except Exception:
+        pass
+
     def _flush_rent_frames(*, reason: str = "") -> None:
         nonlocal cached, new_frames
         if not new_frames:
@@ -539,6 +550,10 @@ def update_rent_cache(
             )
         finally:
             time.sleep(API_SLEEP_SEC)
+
+        next_lawd = tasks[idx][0] if idx < len(tasks) else None
+        if force_rebuild and next_lawd is not None and next_lawd != lawd_cd:
+            _flush_rent_frames(reason=f"{region} 완료")
 
         if force_rebuild and idx % 10 == 0:
             _flush_rent_frames(reason=f"{idx}/{total_tasks} 슬롯")

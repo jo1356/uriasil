@@ -4,15 +4,15 @@
 
 SERVICE_KEY = "여기에_발급받은_API_인증키를_입력하세요"
 
-# 수집할 지역 (법정동코드 앞 5자리)
-LAWD_CD = ["11680", "11650", "11710", "11560"]
-REGION_NAME = ["강남구", "서초구", "송파구", "영등포구"]
+# 수집할 지역 (법정동코드 앞 5자리) — 서초·강남·송파 + 영등포(삼부)
+LAWD_CD = ["11650", "11680", "11710", "11560"]
+REGION_NAME = ["서초구", "강남구", "송파구", "영등포구"]
 
 # 데이터 수집 시작월 (2014년 1월부터)
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v9_rent_sale_purge_all_apts"
+CRAWL_DATA_VERSION = "v10_full_region_rebuild"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
