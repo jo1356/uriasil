@@ -37,6 +37,7 @@ from rent_service import (
     prepare_rent_dashboard_data,
     rent_cache_status,
 )
+from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
 _DATA_CACHE_VERSION = "v48_rent_purge_all_apts"
@@ -1579,8 +1580,13 @@ def main() -> None:
         )
         return
 
-    tab_sale, tab_gap, tab_rent = st.tabs(
-        ["매매 실거래가", "매매가 갭 분석", "전월세 실거래가"]
+    tab_sale, tab_gap, tab_usd, tab_rent = st.tabs(
+        [
+            "매매 실거래가",
+            "매매가 갭 분석",
+            "달러 환산 자산가치",
+            "전월세 실거래가",
+        ]
     )
 
     with tab_sale:
@@ -1602,6 +1608,12 @@ def main() -> None:
             st.info("매매 캐시가 없어 갭 분석을 표시할 수 없습니다.")
         else:
             _render_gap_analysis_tab(sale_df)
+
+    with tab_usd:
+        if not sale_status["exists"] or sale_df.empty:
+            st.info("매매 캐시가 없어 달러 환산 분석을 표시할 수 없습니다.")
+        else:
+            render_usd_asset_tab(sale_df, data_file_fp=data_file_fp)
 
     with tab_rent:
         if not rent_status["exists"] or rent_df.empty:
