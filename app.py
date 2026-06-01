@@ -569,7 +569,7 @@ def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[s
     }
 
 
-# [34평형 선택] 마스터 버튼 — (단지명, UI평형 또는 내부 34평형) 고정 목록
+# [34평형 선택] 마스터 — (단지명, UI평형 또는 내부 34평형). 개포 31평(내부 24평형) 제외.
 _MASTER_34_PYEONG_SELECTION: list[tuple[str, str]] = [
     ("원베일리", "34평형"),
     ("퍼스티지", "34평형"),
@@ -578,8 +578,9 @@ _MASTER_34_PYEONG_SELECTION: list[tuple[str, str]] = [
     ("삼부", "29평"),
     ("신현대", "34평"),
     ("신반포2차", "35평"),
-    ("개포우성 1,2차", "31평"),
     ("개포우성 1,2차", "44평"),
+    ("잠실주공5단지", "34평"),
+    ("잠실주공5단지", "34평형"),
 ]
 
 
@@ -589,22 +590,39 @@ def _label_matches_master_34_target(
     target_apt: str,
     target_pyeong: str,
 ) -> bool:
-    """마스터 목록 (단지, 평형) — UI 표기·내부 평형그룹 모두 매칭."""
+    """마스터 목록 (단지, 평형) — UI 표기·내부 평형그룹 매칭. 개포 31평은 34평 그룹 아님."""
     if _canonical_sidebar_apt(apt) != _canonical_sidebar_apt(target_apt):
+        return False
+    if _is_gaepo_woosung_apt(apt) and internal_pyeong == "24평형":
         return False
     display = _format_pyeong_for_apt(apt, internal_pyeong)
     return display == target_pyeong or internal_pyeong == target_pyeong
 
 
 def _labels_for_34_pyeong_master(all_series: list[str]) -> set[str]:
-    """34평형 마스터 — 고정 (단지·평형) 조합만 선택 (데이터 라벨은 변경하지 않음)."""
+    """34평형 마스터 — 고정 (단지·평형) 조합만 선택."""
     picked: set[str] = set()
     for lb in all_series:
         apt, internal = _extract_label_parts(lb)
+        if _is_gaepo_woosung_apt(apt) and _format_pyeong_for_apt(apt, internal) == "31평":
+            continue
         for target_apt, target_pyeong in _MASTER_34_PYEONG_SELECTION:
             if _label_matches_master_34_target(apt, internal, target_apt, target_pyeong):
                 picked.add(lb)
                 break
+    return picked
+
+
+def _labels_for_24_pyeong_master(all_series: list[str]) -> set[str]:
+    """24평형 마스터 — 내부 24평형 + 개포우성 31평(UI, 내부 24평형) 명시 포함."""
+    picked: set[str] = set()
+    for lb in all_series:
+        apt, internal = _extract_label_parts(lb)
+        if internal == "24평형":
+            picked.add(lb)
+            continue
+        if _is_gaepo_woosung_apt(apt) and _format_pyeong_for_apt(apt, internal) == "31평":
+            picked.add(lb)
     return picked
 
 
@@ -1003,7 +1021,7 @@ def _render_sidebar_series_selector(
     row2c1, row2c2 = st.columns(2)
     with row2c1:
         if st.button("24평형 선택", key=f"{key_prefix}_btn_24", use_container_width=True):
-            picked = {lb for lb in all_series if _extract_label_parts(lb)[1] == "24평형"}
+            picked = _labels_for_24_pyeong_master(all_series)
             _apply_series_selection(key_prefix, all_series, picked)
             st.rerun()
     with row2c2:
