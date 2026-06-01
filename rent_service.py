@@ -475,7 +475,7 @@ def update_rent_cache(
             kind="rent",
             lawd_codes=lawd_codes,
             all_months=all_months,
-            recent_n=2,
+            recent_n=1,
         )
         if refresh_slots:
             cached = drop_cache_slots(cached, refresh_slots)
@@ -487,7 +487,7 @@ def update_rent_cache(
     try:
         print(
             f"[START] [전월세] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+현재월)'})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):

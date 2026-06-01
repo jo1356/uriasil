@@ -503,21 +503,12 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
     st.session_state.incremental_update_running = True
 
 
-def _format_status_message(raw: str) -> str:
-    """진행 메시지를 사용자용 한 줄 문구로 정리."""
-    msg = str(raw or "").strip()
-    if not msg:
-        return "빈 데이터와 최근 2개월 데이터를 확인 중입니다..."
-    if "월 수집" in msg or "월]" in msg:
-        return msg
-    if msg.startswith("["):
-        return msg
-    return msg
+_UPDATE_SPINNER_MSG = "최근 1개월 누락 데이터를 확인하고 수집 중입니다..."
 
 
 def _poll_incremental_update() -> None:
-    """별도 프로세스 수집 진행 — st.status로 실시간 피드백."""
-    from update_status import UPDATE_LOG_FILE, read_update_status
+    """별도 프로세스 수집 진행 — 사이드바에는 심플한 안내만 표시."""
+    from update_status import read_update_status
 
     _init_incremental_update_session()
     if not st.session_state.incremental_update_running:
@@ -527,21 +518,10 @@ def _poll_incremental_update() -> None:
     pid = st.session_state.get("incremental_update_pid")
     proc_alive = _is_pid_alive(pid)
     running = bool(status.get("running")) or proc_alive
-    message = _format_status_message(status.get("message", ""))
-    ratio = float(status.get("ratio", 0.0))
-
-    with st.status(message, expanded=True):
-        st.progress(min(max(ratio, 0.0), 1.0), text=message)
-        st.caption("터미널 프로세스에서 수집 중입니다. 이 화면은 자동으로 갱신됩니다.")
-        if log_path := UPDATE_LOG_FILE:
-            if log_path.exists():
-                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                tail = "\n".join(lines[-6:])
-                if tail.strip():
-                    st.code(tail, language=None)
 
     if running and not status.get("done"):
-        time.sleep(1.5)
+        with st.spinner(_UPDATE_SPINNER_MSG):
+            time.sleep(1.5)
         st.rerun()
         return
 
@@ -1323,7 +1303,7 @@ def _render_sidebar(
 
         st.caption(
             f"{len(_as_list(config.LAWD_CD))}개 구역 · "
-            "누락 월 보충 + 최근 2개월 자동 재수집"
+            "누락 월 보충 + 이번 달 자동 재수집"
         )
 
         st.divider()
