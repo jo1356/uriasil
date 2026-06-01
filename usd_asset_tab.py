@@ -143,6 +143,13 @@ def _compute_period_roi(period_df: pd.DataFrame) -> dict:
 def build_usd_dual_axis_chart(period_df: pd.DataFrame) -> go.Figure:
     """원화(억)·달러($만) 듀얼 Y축 차트."""
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+    if period_df.empty:
+        fig.update_layout(
+            title=f"{TARGET_APT} {TARGET_PYEONG} — 원화 vs 달러 환산 매매가",
+            height=700,
+        )
+        fig.update_xaxes(title_text="계약일", rangeslider_visible=False)
+        return fig
 
     x = period_df["contract_dt"]
     manwon = pd.to_numeric(period_df["거래금액(만원)"], errors="coerce")
@@ -206,20 +213,23 @@ def build_usd_dual_axis_chart(period_df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(l=60, r=60, t=80, b=50),
     )
-    fig.update_xaxes(title_text="계약일")
+    fig.update_xaxes(title_text="계약일", rangeslider_visible=False)
     fig.update_yaxes(title_text="원화 (억원)", secondary_y=False, tickformat=".1f")
     fig.update_yaxes(title_text="달러 ($만)", secondary_y=True, tickformat=".0f")
 
     return fig
 
 
+_PERIOD_SLIDER_KEY = "usd_asset_period_range"
+
+
+def _filter_by_period(df: pd.DataFrame, start_d: date, end_d: date) -> pd.DataFrame:
+    mask = (df["contract_dt"].dt.date >= start_d) & (df["contract_dt"].dt.date <= end_d)
+    return df.loc[mask].copy()
+
+
 def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> None:
     """달러 환산 자산가치 탭 본문."""
-    st.caption(
-        f"**{TARGET_APT}** · **{TARGET_PYEONG}** 매매 실거래만 분석합니다. "
-        "원/달러 환율(yfinance)을 계약일 기준으로 병합해 달러 환산가를 계산합니다."
-    )
-
     try:
         df = build_raemian_usd_series(sale_df, data_file_fp)
     except Exception as exc:
@@ -235,18 +245,38 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
 
     min_d: date = df["contract_dt"].min().date()
     max_d: date = df["contract_dt"].max().date()
+    default_range = (min_d, max_d)
 
-    st.subheader("📅 분석 기간")
-    start_d, end_d = st.slider(
-        "기간 선택 (최초 거래 ↔ 최종 거래 수익률 계산 구간)",
-        min_value=min_d,
-        max_value=max_d,
-        value=(min_d, max_d),
-        format="YYYY-MM-DD",
+    if _PERIOD_SLIDER_KEY not in st.session_state:
+        st.session_state[_PERIOD_SLIDER_KEY] = default_range
+
+    start_d, end_d = st.session_state[_PERIOD_SLIDER_KEY]
+    chart_period = _filter_by_period(df, start_d, end_d)
+
+    # 1) 차트 최상단
+    st.plotly_chart(
+        build_usd_dual_axis_chart(chart_period),
+        use_container_width=True,
+        key="usd_asset_dual_chart",
     )
 
-    mask = (df["contract_dt"].dt.date >= start_d) & (df["contract_dt"].dt.date <= end_d)
-    period = df.loc[mask].copy()
+    st.caption(
+        f"{TARGET_APT} · {TARGET_PYEONG} · "
+        "원/달러 환율(yfinance) 계약일 기준 병합"
+    )
+
+    # 2) 기간 슬라이더 — 차트 바로 아래
+    start_d, end_d = st.slider(
+        "분석 기간",
+        min_value=min_d,
+        max_value=max_d,
+        value=(start_d, end_d),
+        format="YYYY-MM-DD",
+        key=_PERIOD_SLIDER_KEY,
+        help="선택 구간의 차트·수익률이 함께 갱신됩니다.",
+    )
+
+    period = _filter_by_period(df, start_d, end_d)
 
     if period.empty:
         st.info("선택한 기간에 거래가 없습니다. 슬라이더 구간을 조정해 주세요.")
@@ -254,7 +284,9 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
 
     roi = _compute_period_roi(period)
 
-    st.subheader("📊 구간 수익률")
+    # 3) 수익률 — 최하단
+    st.divider()
+    st.subheader("구간 수익률")
     st.markdown(
         f"**{roi['first_label']}** → **{roi['last_label']}** "
         f"({len(period):,}건)"
@@ -273,10 +305,3 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> No
             value=roi["usd_text"],
             help="동일 구간 달러 환산가 변동",
         )
-
-    st.subheader("📈 가격 추이 (원화 · 달러)")
-    st.plotly_chart(
-        build_usd_dual_axis_chart(period),
-        use_container_width=True,
-        key="usd_asset_dual_chart",
-    )
