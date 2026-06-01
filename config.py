@@ -12,7 +12,7 @@ REGION_NAME = ["서초구", "강남구", "송파구", "영등포구"]
 DATA_START_YMD = "201401"
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v10_full_region_rebuild"
+CRAWL_DATA_VERSION = "v11_jamsil_jugong5_name_map"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
@@ -37,8 +37,13 @@ CRAWL_APARTMENT_API_NAMES = [
     "현대11차",
     "현대12",
     "현대12차",
-    # 기존 타겟 단지
+    # 잠실주공5단지 (송파 잠실동)
     "주공아파트 5단지",
+    "주공아파트5단지",
+    "잠실주공5단지",
+    "잠실주공 5단지",
+    "잠실주공5",
+    # 기존 타겟 단지
     "삼부",
     "퍼스티지",
     "디에이치방배",

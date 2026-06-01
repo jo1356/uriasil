@@ -348,11 +348,34 @@ def assign_sambu_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def normalize_apartment_name_key(name: str) -> str:
+    """아파트명 비교용 — 공백 제거."""
+    return re.sub(r"\s+", "", str(name or "").strip())
+
+
 def is_jamsil_jugong5_apartment(dong: str, apt: str) -> bool:
-    """잠실동 주공아파트 5단지 (국토부 API 공식 명칭)."""
+    """잠실동 잠실주공5단지 — API·표시명·띄어쓰기 변형 통합."""
     j_dong = str(getattr(config, "JAMSIL_JUGONG5_DONG", "잠실동"))
-    j_name = str(getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지"))
-    return j_dong in str(dong) and str(apt).strip() == j_name
+    if j_dong not in str(dong):
+        return False
+    a = normalize_apartment_name_key(apt)
+    if not a:
+        return False
+    api_key = normalize_apartment_name_key(
+        getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지")
+    )
+    label_key = normalize_apartment_name_key(
+        getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지")
+    )
+    if a in (api_key, label_key):
+        return True
+    if "잠실주공5" in a:
+        return True
+    if "주공아파트5단지" in a or a == "주공아파트5단지":
+        return True
+    if "잠실" in a and "주공" in a and "5" in a:
+        return True
+    return False
 
 
 def get_jamsil_jugong5_area_rules() -> list[tuple[str, float, float]]:
@@ -385,9 +408,14 @@ def resolve_apt_for_pyeong_rules(
     if isinstance(row, dict):
         api_name = str(row.get(apt_col, "") or "").strip()
         display = str(row.get(target_col, "") or "").strip()
+        dong_s = _safe_str(row.get("법정동", ""))
     else:
         api_name = str(row.get(apt_col, "") or "").strip()
         display = str(row.get(target_col, "") or "").strip()
+        dong_s = _safe_str(row.get("법정동", ""))
+    j5_name = str(getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지"))
+    if is_jamsil_jugong5_apartment(dong_s, api_name or display):
+        return j5_name
     if api_name:
         return api_name
     sb_label = str(getattr(config, "SINBANPO2_LABEL", "신반포2차"))
@@ -400,6 +428,9 @@ def resolve_apt_for_pyeong_rules(
     sh_label = str(getattr(config, "SINHYUNDAI_LABEL", "신현대"))
     if display == sh_label:
         return api_name or sh_label
+    j5_label = str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지"))
+    if display == j5_label:
+        return j5_name
     return display
 
 
@@ -823,7 +854,7 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: area_m2_to_pyeong_string(
             r.get("전용면적(㎡)"),
             dong=_safe_str(r.get("법정동", "")),
-            apt=str(r.get("타겟명", r.get("아파트", ""))).strip(),
+            apt=resolve_apt_for_pyeong_rules(r),
         ),
         axis=1,
     )
@@ -1357,10 +1388,26 @@ def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
     name = target["name"]
     dong_mask = dong_col.str.contains(dong, case=False, na=False)
     label = str(target.get("label") or "").strip()
+    j5_label = str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지"))
+    if label == j5_label or name == str(
+        getattr(config, "JAMSIL_JUGONG5_APT_NAME", "주공아파트 5단지")
+    ):
+        apt_mask = pd.Series(
+            [
+                is_jamsil_jugong5_apartment(d, a)
+                for d, a in zip(dong_col, apt_series, strict=False)
+            ],
+            index=df.index,
+        )
+        return dong_mask & apt_mask
     if target.get("exact_name") is True:
         apt_mask = apt_series == name
         if label and label != name:
             apt_mask = apt_mask | (apt_series == label)
+        apt_mask = apt_mask | apt_series.map(
+            lambda a: normalize_apartment_name_key(a)
+            == normalize_apartment_name_key(name)
+        )
     else:
         apt_mask = apt_series.str.contains(name, case=False, na=False)
         if label and label != name:
@@ -1387,6 +1434,8 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
         if display_name == str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차")):
             chunk["아파트"] = display_name
         if display_name == str(getattr(config, "SINHYUNDAI_LABEL", "신현대")):
+            chunk["아파트"] = display_name
+        if display_name == str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지")):
             chunk["아파트"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()
