@@ -16,6 +16,7 @@ TARGET_APT = "래미안퍼스티지"
 TARGET_PYEONG = "34평형"
 FX_START = "2014-01-01"
 INDEX_BASE_YEAR = 2014
+CHART_MARKER_SIZE = 4
 
 
 @st.cache_data(ttl=3600, show_spinner="원/달러 환율 데이터 불러오는 중...")
@@ -165,8 +166,6 @@ def _tooltip_rows(period_df: pd.DataFrame) -> list[list[str]]:
                 str(row["계약일자_표시"]),
                 f"{manwon / MANWON_PER_EOK:.1f}억",
                 f"${usd / USD_PER_MAN:.1f}만",
-                f"{float(row['원화지수']):.1f}",
-                f"{float(row['달러지수']):.1f}",
                 f"환율 {float(row['krw_per_usd']):,.2f}원/USD",
             ]
         )
@@ -189,14 +188,13 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
 
     x = period_df["contract_dt"]
     custom = _tooltip_rows(period_df)
-    krw_hover = (
+    abs_hover = (
         "%{customdata[0]}<br>"
         "원화: %{customdata[1]}<br>"
         "달러: %{customdata[2]}<br>"
-        "원화 지수: %{customdata[3]}<br>"
-        "달러 지수: %{customdata[4]}<br>"
-        "%{customdata[5]}<extra></extra>"
+        "%{customdata[3]}<extra></extra>"
     )
+    marker_style = dict(size=CHART_MARKER_SIZE)
 
     fig.add_trace(
         go.Scatter(
@@ -205,9 +203,9 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
             mode="lines+markers",
             name="원화 지수",
             line=dict(color="#2563eb", width=2),
-            marker=dict(size=6),
+            marker=marker_style,
             customdata=custom,
-            hovertemplate=krw_hover,
+            hovertemplate=abs_hover,
         ),
     )
     fig.add_trace(
@@ -216,10 +214,10 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
             y=period_df["달러지수"],
             mode="lines+markers",
             name="달러 지수",
-            line=dict(color="#dc2626", width=2, dash="dot"),
-            marker=dict(size=6),
+            line=dict(color="#dc2626", width=2),
+            marker=marker_style,
             customdata=custom,
-            hovertemplate=krw_hover,
+            hovertemplate=abs_hover,
         ),
     )
 
