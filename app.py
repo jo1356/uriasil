@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import html
-import threading
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
@@ -26,19 +29,16 @@ from data_service import (
     parse_target_pyeong,
     parse_targets,
     prepare_dashboard_data,
-    rebuild_cache_from_scratch,
     sort_chart_labels,
-    run_smart_incremental_update,
     validate_service_key,
 )
 from rent_service import (
     load_cached_rent_data,
     prepare_rent_dashboard_data,
-    rebuild_rent_cache_from_scratch,
     rent_cache_status,
-    update_rent_cache,
 )
 
+_PROJECT_DIR = Path(__file__).resolve().parent
 _DATA_CACHE_VERSION = "v48_rent_purge_all_apts"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
@@ -440,52 +440,118 @@ def _clear_data_caches() -> None:
     _prepare_comparison_chart_df.clear()
 
 
+def _subprocess_env_with_service_key() -> dict[str, str]:
+    env = os.environ.copy()
+    try:
+        secret = str(st.secrets.get("SERVICE_KEY", "")).strip()
+        if secret:
+            env["SERVICE_KEY"] = secret
+    except Exception:
+        pass
+    return env
+
+
+def _is_pid_alive(pid: int | None) -> bool:
+    if pid is None or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        still_active = 259
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return int(code.value) == still_active
+            return False
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _init_incremental_update_session() -> None:
     if "incremental_update_running" not in st.session_state:
         st.session_state.incremental_update_running = False
-    if "incremental_update_thread" not in st.session_state:
-        st.session_state.incremental_update_thread = None
-    if "incremental_update_error" not in st.session_state:
-        st.session_state.incremental_update_error = None
+    if "incremental_update_pid" not in st.session_state:
+        st.session_state.incremental_update_pid = None
 
 
-def _start_background_incremental_update() -> None:
-    def _worker() -> None:
-        try:
-            run_smart_incremental_update()
-            st.session_state.incremental_update_error = None
-        except Exception as exc:
-            st.session_state.incremental_update_error = str(exc)
-        finally:
-            st.session_state.incremental_update_running = False
+def _start_subprocess_fetch(*extra_args: str) -> None:
+    """Streamlit과 분리된 OS 프로세스에서 fetch_data.py 실행."""
+    from update_status import UPDATE_LOG_FILE, reset_update_status
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    st.session_state.incremental_update_thread = thread
+    reset_update_status("별도 프로세스에서 수집을 시작합니다...")
+    log_path = UPDATE_LOG_FILE
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_path, "w", encoding="utf-8")
+    cmd = [sys.executable, "-u", str(_PROJECT_DIR / "fetch_data.py"), *extra_args]
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(_PROJECT_DIR),
+        env=_subprocess_env_with_service_key(),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+    )
+    log_file.close()
+    st.session_state.incremental_update_pid = proc.pid
     st.session_state.incremental_update_running = True
-    st.session_state.incremental_update_error = None
-    thread.start()
+
+
+def _format_status_message(raw: str) -> str:
+    """진행 메시지를 사용자용 한 줄 문구로 정리."""
+    msg = str(raw or "").strip()
+    if not msg:
+        return "빈 데이터와 최근 2개월 데이터를 확인 중입니다..."
+    if "월 수집" in msg or "월]" in msg:
+        return msg
+    if msg.startswith("["):
+        return msg
+    return msg
 
 
 def _poll_incremental_update() -> None:
-    """백그라운드 차분 수집 진행·완료 처리."""
+    """별도 프로세스 수집 진행 — st.status로 실시간 피드백."""
+    from update_status import UPDATE_LOG_FILE, read_update_status
+
     _init_incremental_update_session()
     if not st.session_state.incremental_update_running:
         return
 
-    st.info("빈 데이터와 최근 2개월 데이터를 확인 중입니다...")
-    thread = st.session_state.incremental_update_thread
-    if thread is not None and thread.is_alive():
+    status = read_update_status()
+    pid = st.session_state.get("incremental_update_pid")
+    proc_alive = _is_pid_alive(pid)
+    running = bool(status.get("running")) or proc_alive
+    message = _format_status_message(status.get("message", ""))
+    ratio = float(status.get("ratio", 0.0))
+
+    with st.status(message, expanded=True):
+        st.progress(min(max(ratio, 0.0), 1.0), text=message)
+        st.caption("터미널 프로세스에서 수집 중입니다. 이 화면은 자동으로 갱신됩니다.")
+        if log_path := UPDATE_LOG_FILE:
+            if log_path.exists():
+                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                tail = "\n".join(lines[-6:])
+                if tail.strip():
+                    st.code(tail, language=None)
+
+    if running and not status.get("done"):
         time.sleep(1.5)
         st.rerun()
         return
 
     st.session_state.incremental_update_running = False
-    st.session_state.incremental_update_thread = None
+    st.session_state.incremental_update_pid = None
     _clear_data_caches()
-    err = st.session_state.incremental_update_error
+    err = status.get("error")
     if err:
-        st.error(err)
-    else:
+        st.error(str(err))
+    elif status.get("done"):
         st.success("매매·전월세 업데이트 완료")
     st.rerun()
 
@@ -1250,26 +1316,19 @@ def _render_sidebar(
         ):
             try:
                 validate_service_key()
-                _start_background_incremental_update()
+                _start_subprocess_fetch()
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
 
-        if st.button("♻️ 캐시 초기화 후 전체 재수집", use_container_width=True):
+        if st.button(
+            "♻️ 캐시 초기화 후 전체 재수집",
+            use_container_width=True,
+            disabled=update_disabled,
+        ):
             try:
                 validate_service_key()
-                progress = st.progress(0, text="캐시 삭제 중...")
-                status_text = st.empty()
-
-                def on_progress(ratio: float, msg: str) -> None:
-                    progress.progress(min(ratio, 1.0), text=msg)
-                    status_text.caption(msg)
-
-                rebuild_cache_from_scratch(on_progress)
-                rebuild_rent_cache_from_scratch(on_progress)
-                _clear_data_caches()
-                progress.progress(1.0, text="완료!")
-                st.success("매매·전월세 전체 재수집 완료")
+                _start_subprocess_fetch("--rebuild")
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))

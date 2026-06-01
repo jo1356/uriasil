@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 import config
+from update_status import finish_update_status, reset_update_status, write_update_status
 from data_service import (
     cache_status,
     rebuild_cache_from_scratch,
@@ -82,24 +84,45 @@ def main() -> None:
     print("-" * 60)
 
     def progress(ratio: float, msg: str) -> None:
-        print(f"  [{ratio * 100:5.1f}%] {msg}")
+        line = f"  [{ratio * 100:5.1f}%] {msg}"
+        print(line, flush=True)
+        write_update_status(ratio, msg, running=True, done=False)
 
-    if args.rent_only:
+    reset_update_status("국토부 API 차분 수집 시작...")
+
+    try:
+        if args.rent_only:
+            if args.rebuild:
+                df = rebuild_rent_cache_from_scratch(progress)
+            else:
+                df = update_rent_cache(progress)
+            print(f"\n  전월세 완료: {len(df):,}건\n", flush=True)
+            finish_update_status()
+            return
+
         if args.rebuild:
-            df = rebuild_rent_cache_from_scratch(progress)
+            sale_df = rebuild_cache_from_scratch(progress)
+            rent_df = rebuild_rent_cache_from_scratch(progress)
+            print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n", flush=True)
         else:
-            df = update_rent_cache(progress)
-        print(f"\n  전월세 완료: {len(df):,}건\n")
-        return
+            sale_df, rent_df = run_smart_incremental_update(progress)
+            print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n", flush=True)
 
-    if args.rebuild:
-        sale_df = rebuild_cache_from_scratch(progress)
-        rent_df = rebuild_rent_cache_from_scratch(progress)
-        print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n")
-    else:
-        sale_df, rent_df = run_smart_incremental_update(progress)
-        print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n")
+        sale_status = cache_status()
+        rent_status = rent_cache_status()
+        print(
+            f"  최종 슬롯 — 매매: {sale_status['filled_slots']}/{sale_status['total_slots']} "
+            f"/ 전월세: {rent_status['filled_slots']}/{rent_status['total_slots']}",
+            flush=True,
+        )
+        finish_update_status()
+    except Exception as exc:
+        finish_update_status(error=str(exc))
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        sys.exit(1)
