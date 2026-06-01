@@ -4,13 +4,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import pandas as pd
 import requests
@@ -33,6 +35,8 @@ SALE_CACHE_CSV = BASE_DIR / "sales_data.csv"
 LEGACY_SALE_CACHE_CSV = BASE_DIR / "all_combined_data.csv"
 CACHE_CSV = SALE_CACHE_CSV
 CRAWL_VERSION_FILE = BASE_DIR / ".crawl_data_version"
+SLOT_MANIFEST_FILE = BASE_DIR / "crawl_slots.json"
+CacheKind = Literal["sale", "rent"]
 
 TRANSACTION_TYPE_SALE = "매매"
 TRANSACTION_TYPE_RENT = "전월세"
@@ -991,6 +995,133 @@ def crawl_version_changed() -> bool:
     return _read_crawl_version_stamp() != expected
 
 
+def _slot_pair_key(lawd_cd: str, deal_ymd: str) -> str:
+    return f"{lawd_cd}|{deal_ymd}"
+
+
+def _parse_slot_pair_key(key: str) -> tuple[str, str]:
+    lawd, ym = str(key).split("|", 1)
+    return lawd, ym
+
+
+def _load_slot_manifest() -> dict[str, list[str]]:
+    if not SLOT_MANIFEST_FILE.exists():
+        return {"sale": [], "rent": []}
+    try:
+        data = json.loads(SLOT_MANIFEST_FILE.read_text(encoding="utf-8"))
+        return {
+            "sale": [str(x) for x in data.get("sale", [])],
+            "rent": [str(x) for x in data.get("rent", [])],
+        }
+    except Exception:
+        return {"sale": [], "rent": []}
+
+
+def _save_slot_manifest(data: dict[str, list[str]]) -> None:
+    SLOT_MANIFEST_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _manifest_slots_as_pairs(kind: CacheKind) -> set[tuple[str, str]]:
+    keys = _load_slot_manifest().get(kind, [])
+    out: set[tuple[str, str]] = set()
+    for k in keys:
+        try:
+            out.add(_parse_slot_pair_key(k))
+        except ValueError:
+            continue
+    return out
+
+
+def mark_slots_fetched(kind: CacheKind, slots: Iterable[tuple[str, str]]) -> None:
+    """API 조회 완료 슬롯 기록 — 빈 응답 월도 600/600 추적에 포함."""
+    data = _load_slot_manifest()
+    current = set(data.get(kind, []))
+    for lawd, ym in slots:
+        current.add(_slot_pair_key(lawd, ym))
+    data[kind] = sorted(current)
+    _save_slot_manifest(data)
+
+
+def clear_slot_manifest(kind: CacheKind | None = None) -> None:
+    if kind is None:
+        _save_slot_manifest({"sale": [], "rent": []})
+        return
+    data = _load_slot_manifest()
+    data[kind] = []
+    _save_slot_manifest(data)
+
+
+def get_filled_slots(cached: pd.DataFrame, kind: CacheKind) -> set[tuple[str, str]]:
+    """CSV 행 + 수집 완료 매니페스트 기준 채워진 (지역×월) 슬롯."""
+    from_csv = _cached_keys(cached) if not cached.empty else set()
+    return from_csv | _manifest_slots_as_pairs(kind)
+
+
+def get_recent_refresh_months(n: int = 2) -> list[str]:
+    """현재월·직전월 등 최근 N개월 YYYYMM (지연 신고 반영용 재수집)."""
+    months = generate_month_range(get_data_start_ymd())
+    if not months:
+        return []
+    return months[-n:] if len(months) >= n else list(months)
+
+
+def plan_incremental_update_tasks(
+    *,
+    cached: pd.DataFrame,
+    kind: CacheKind,
+    lawd_codes: list[str],
+    all_months: list[str],
+    recent_n: int = 2,
+) -> tuple[list[tuple[str, str]], set[tuple[str, str]]]:
+    """
+    차분 수집 작업 목록.
+    - 최근 recent_n개월: 항상 재수집(덮어쓰기)
+    - 그 외: filled에 없는 누락 슬롯만
+    """
+    filled = get_filled_slots(cached, kind)
+    recent_months = get_recent_refresh_months(recent_n)
+    refresh_slots = {(lawd, ym) for lawd in lawd_codes for ym in recent_months}
+
+    tasks: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for lawd in lawd_codes:
+        for ym in recent_months:
+            slot = (lawd, ym)
+            if slot not in seen:
+                tasks.append(slot)
+                seen.add(slot)
+
+    for lawd in lawd_codes:
+        for ym in all_months:
+            slot = (lawd, ym)
+            if slot not in filled and slot not in seen:
+                tasks.append(slot)
+                seen.add(slot)
+
+    return tasks, refresh_slots
+
+
+def drop_cache_slots(
+    df: pd.DataFrame,
+    slots: set[tuple[str, str]],
+) -> pd.DataFrame:
+    """재수집할 (지역×월) 기존 행 제거 — API 결과로 덮어쓰기."""
+    if df.empty or not slots:
+        return df
+    if "조회지역코드" not in df.columns or "조회계약년월" not in df.columns:
+        return df
+    lawd_s = df["조회지역코드"].astype(str)
+    ym_s = df["조회계약년월"].astype(str)
+    drop_mask = pd.Series(False, index=df.index)
+    for lawd, ym in slots:
+        drop_mask |= (lawd_s == lawd) & (ym_s == ym)
+    return df.loc[~drop_mask].copy()
+
+
 def reprocess_sale_cache() -> pd.DataFrame:
     """기존 매매 캐시 CSV — 평형·타겟 규칙 재적용 후 저장."""
     cached = load_cached_data()
@@ -1500,6 +1631,7 @@ def _region_label(lawd_cd: str, index: int) -> str:
 def rebuild_cache_from_scratch(progress: ProgressCallback = None) -> pd.DataFrame:
     """기존 캐시를 삭제하고 API에서 전 구간을 새로 수집합니다."""
     clear_cache_file()
+    clear_slot_manifest("sale")
     return update_cache(progress=progress, force_rebuild=True)
 
 
@@ -1517,22 +1649,32 @@ def update_cache(
     all_months = generate_month_range(get_data_start_ymd())
 
     if crawl_version_changed() and not force_rebuild:
-        force_rebuild = True
+        try:
+            reprocess_sale_cache()
+            _write_crawl_version_stamp()
+        except Exception as exc:
+            _log_row_parse_error("version_reprocess_sale", exc)
+
+    refresh_slots: set[tuple[str, str]] = set()
 
     if force_rebuild:
         clear_cache_file()
+        clear_slot_manifest("sale")
         cached = pd.DataFrame()
-        existing: set[tuple[str, str]] = set()
+        tasks = [(lawd, ym) for lawd in lawd_codes for ym in all_months]
+        refresh_slots = set()
     else:
         cached = load_cached_data()
         cached = enforce_strict_pyeong_on_dataframe(cached) if not cached.empty else cached
-        existing = _cached_keys(cached)
-
-    tasks: list[tuple[str, str]] = []
-    for lawd_cd in lawd_codes:
-        for deal_ymd in all_months:
-            if (lawd_cd, deal_ymd) not in existing:
-                tasks.append((lawd_cd, deal_ymd))
+        tasks, refresh_slots = plan_incremental_update_tasks(
+            cached=cached,
+            kind="sale",
+            lawd_codes=lawd_codes,
+            all_months=all_months,
+            recent_n=2,
+        )
+        if refresh_slots:
+            cached = drop_cache_slots(cached, refresh_slots)
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
@@ -1540,7 +1682,7 @@ def update_cache(
     try:
         print(
             f"[START] [매매] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '누락분만'})",
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):
@@ -1609,13 +1751,14 @@ def update_cache(
                     f"오류({deal_ymd}): {exc} — 다음 월로 진행",
                 )
         finally:
+            mark_slots_fetched("sale", [(lawd_cd, deal_ymd)])
             time.sleep(API_SLEEP_SEC)
 
         next_lawd = tasks[idx][0] if idx < len(tasks) else None
-        if force_rebuild and next_lawd is not None and next_lawd != lawd_cd:
+        if next_lawd is not None and next_lawd != lawd_cd:
             _flush_sale_frames(reason=f"{region} 완료")
 
-        if force_rebuild and idx % 10 == 0:
+        if idx % 10 == 0:
             _flush_sale_frames(reason=f"{idx}/{total_tasks} 슬롯")
 
     if new_frames:
@@ -1638,11 +1781,30 @@ def update_cache(
     _write_crawl_version_stamp()
 
     if progress and total_tasks == 0:
-        progress(1.0, "캐시가 최신 상태입니다. (로컬 재처리·보충 반영 완료)")
+        progress(1.0, "캐시가 최신 상태입니다. (누락·최근 2개월 확인 완료)")
     elif progress:
         progress(1.0, f"완료 - 총 {len(cached):,}건")
 
     return cached
+
+
+def run_smart_incremental_update(
+    progress: ProgressCallback = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """누락 월 보충 + 최근 2개월 재수집 (매매·전월세)."""
+    from rent_service import update_rent_cache
+
+    def sale_progress(ratio: float, msg: str) -> None:
+        if progress:
+            progress(min(ratio * 0.5, 0.5), f"[매매] {msg}")
+
+    def rent_progress(ratio: float, msg: str) -> None:
+        if progress:
+            progress(0.5 + min(ratio, 1.0) * 0.5, f"[전월세] {msg}")
+
+    sale_df = update_cache(progress=sale_progress, force_rebuild=False)
+    rent_df = update_rent_cache(progress=rent_progress, force_rebuild=False)
+    return sale_df, rent_df
 
 
 def prepare_dashboard_data(
@@ -1783,7 +1945,7 @@ def cache_status() -> dict:
     months = generate_month_range(get_data_start_ymd())
     lawd_codes = _as_list(config.LAWD_CD)
     total_slots = len(months) * len(lawd_codes)
-    filled = len(_cached_keys(cached)) if not cached.empty else 0
+    filled = len(get_filled_slots(cached, "sale"))
     period = (
         f"{get_data_start_ymd()[:4]}.{get_data_start_ymd()[4:6]} ~ "
         f"{months[-1][:4]}.{months[-1][4:6]}"

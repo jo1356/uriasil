@@ -16,7 +16,7 @@ from data_service import (
     cache_status,
     rebuild_cache_from_scratch,
     refresh_local_cache_files,
-    update_cache,
+    run_smart_incremental_update,
     validate_service_key,
 )
 from rent_service import (
@@ -97,8 +97,7 @@ def main() -> None:
         rent_df = rebuild_rent_cache_from_scratch(progress)
         print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n")
     else:
-        sale_df = update_cache(progress)
-        rent_df = update_rent_cache(progress)
+        sale_df, rent_df = run_smart_incremental_update(progress)
         print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n")
 
 

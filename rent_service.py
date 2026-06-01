@@ -434,19 +434,35 @@ def update_rent_cache(
     progress: ProgressCallback = None,
     force_rebuild: bool = False,
 ) -> pd.DataFrame:
-    from data_service import crawl_version_changed
-
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
     all_months = generate_month_range(get_data_start_ymd())
 
+    from data_service import (
+        clear_slot_manifest,
+        crawl_version_changed,
+        drop_cache_slots,
+        get_filled_slots,
+        mark_slots_fetched,
+        plan_incremental_update_tasks,
+        reprocess_rent_cache,
+        _write_crawl_version_stamp,
+    )
+
     if crawl_version_changed() and not force_rebuild:
-        force_rebuild = True
+        try:
+            reprocess_rent_cache(import_supplemental=False)
+            _write_crawl_version_stamp()
+        except Exception as exc:
+            _log_row_parse_error("version_reprocess_rent", exc)
+
+    refresh_slots: set[tuple[str, str]] = set()
 
     if force_rebuild:
         clear_rent_cache_file()
+        clear_slot_manifest("rent")
         cached = pd.DataFrame()
-        existing: set[tuple[str, str]] = set()
+        tasks = [(lawd, ym) for lawd in lawd_codes for ym in all_months]
     else:
         cached = load_cached_rent_data()
         cached = (
@@ -454,13 +470,15 @@ def update_rent_cache(
             if not cached.empty
             else cached
         )
-        existing = _cached_keys(cached)
-
-    tasks: list[tuple[str, str]] = []
-    for lawd_cd in lawd_codes:
-        for deal_ymd in all_months:
-            if (lawd_cd, deal_ymd) not in existing:
-                tasks.append((lawd_cd, deal_ymd))
+        tasks, refresh_slots = plan_incremental_update_tasks(
+            cached=cached,
+            kind="rent",
+            lawd_codes=lawd_codes,
+            all_months=all_months,
+            recent_n=2,
+        )
+        if refresh_slots:
+            cached = drop_cache_slots(cached, refresh_slots)
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
@@ -469,7 +487,7 @@ def update_rent_cache(
     try:
         print(
             f"[START] [전월세] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '누락분만'})",
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):
@@ -549,13 +567,14 @@ def update_rent_cache(
                 flush=True,
             )
         finally:
+            mark_slots_fetched("rent", [(lawd_cd, deal_ymd)])
             time.sleep(API_SLEEP_SEC)
 
         next_lawd = tasks[idx][0] if idx < len(tasks) else None
-        if force_rebuild and next_lawd is not None and next_lawd != lawd_cd:
+        if next_lawd is not None and next_lawd != lawd_cd:
             _flush_rent_frames(reason=f"{region} 완료")
 
-        if force_rebuild and idx % 10 == 0:
+        if idx % 10 == 0:
             _flush_rent_frames(reason=f"{idx}/{total_tasks} 슬롯")
 
         if (
@@ -602,7 +621,10 @@ def update_rent_cache(
 
 
 def rebuild_rent_cache_from_scratch(progress: ProgressCallback = None) -> pd.DataFrame:
+    from data_service import clear_slot_manifest
+
     clear_rent_cache_file()
+    clear_slot_manifest("rent")
     return update_rent_cache(progress=progress, force_rebuild=True)
 
 
@@ -631,7 +653,9 @@ def rent_cache_status() -> dict:
     months = generate_month_range(get_data_start_ymd())
     lawd_codes = _as_list(config.LAWD_CD)
     total_slots = len(months) * len(lawd_codes)
-    filled = len(_cached_keys(cached)) if not cached.empty else 0
+    from data_service import get_filled_slots
+
+    filled = len(get_filled_slots(cached, "rent"))
     period = (
         f"{get_data_start_ymd()[:4]}.{get_data_start_ymd()[4:6]} ~ "
         f"{months[-1][:4]}.{months[-1][4:6]}"

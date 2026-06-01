@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import html
+import threading
+import time
 
 import streamlit as st
 import pandas as pd
@@ -26,7 +28,7 @@ from data_service import (
     prepare_dashboard_data,
     rebuild_cache_from_scratch,
     sort_chart_labels,
-    update_cache,
+    run_smart_incremental_update,
     validate_service_key,
 )
 from rent_service import (
@@ -436,6 +438,56 @@ def _clear_data_caches() -> None:
     get_sorted_chart_options.clear()
     _prepare_raw_chart_df.clear()
     _prepare_comparison_chart_df.clear()
+
+
+def _init_incremental_update_session() -> None:
+    if "incremental_update_running" not in st.session_state:
+        st.session_state.incremental_update_running = False
+    if "incremental_update_thread" not in st.session_state:
+        st.session_state.incremental_update_thread = None
+    if "incremental_update_error" not in st.session_state:
+        st.session_state.incremental_update_error = None
+
+
+def _start_background_incremental_update() -> None:
+    def _worker() -> None:
+        try:
+            run_smart_incremental_update()
+            st.session_state.incremental_update_error = None
+        except Exception as exc:
+            st.session_state.incremental_update_error = str(exc)
+        finally:
+            st.session_state.incremental_update_running = False
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    st.session_state.incremental_update_thread = thread
+    st.session_state.incremental_update_running = True
+    st.session_state.incremental_update_error = None
+    thread.start()
+
+
+def _poll_incremental_update() -> None:
+    """백그라운드 차분 수집 진행·완료 처리."""
+    _init_incremental_update_session()
+    if not st.session_state.incremental_update_running:
+        return
+
+    st.info("빈 데이터와 최근 2개월 데이터를 확인 중입니다...")
+    thread = st.session_state.incremental_update_thread
+    if thread is not None and thread.is_alive():
+        time.sleep(1.5)
+        st.rerun()
+        return
+
+    st.session_state.incremental_update_running = False
+    st.session_state.incremental_update_thread = None
+    _clear_data_caches()
+    err = st.session_state.incremental_update_error
+    if err:
+        st.error(err)
+    else:
+        st.success("매매·전월세 업데이트 완료")
+    st.rerun()
 
 
 def _clear_series_selection_session() -> None:
@@ -1185,21 +1237,20 @@ def _render_sidebar(
         st.divider()
         st.subheader("📥 데이터 수집")
 
-        if st.button("🔄 데이터 업데이트", use_container_width=True, type="primary"):
+        _poll_incremental_update()
+
+        _init_incremental_update_session()
+        update_disabled = bool(st.session_state.incremental_update_running)
+
+        if st.button(
+            "🔄 데이터 업데이트",
+            use_container_width=True,
+            type="primary",
+            disabled=update_disabled,
+        ):
             try:
                 validate_service_key()
-                progress = st.progress(0, text="준비 중...")
-                status_text = st.empty()
-
-                def on_progress(ratio: float, msg: str) -> None:
-                    progress.progress(min(ratio, 1.0), text=msg)
-                    status_text.caption(msg)
-
-                update_cache(on_progress)
-                update_rent_cache(on_progress)
-                _clear_data_caches()
-                progress.progress(1.0, text="완료!")
-                st.success("매매·전월세 업데이트 완료")
+                _start_background_incremental_update()
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
@@ -1223,7 +1274,10 @@ def _render_sidebar(
             except Exception as exc:
                 st.error(str(exc))
 
-        st.caption(f"{len(_as_list(config.LAWD_CD))}개 구역 · 누락 월만 추가 수집")
+        st.caption(
+            f"{len(_as_list(config.LAWD_CD))}개 구역 · "
+            "누락 월 보충 + 최근 2개월 자동 재수집"
+        )
 
         st.divider()
         st.header("⚙️ 설정")
