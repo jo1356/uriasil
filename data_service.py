@@ -1060,8 +1060,8 @@ def get_filled_slots(cached: pd.DataFrame, kind: CacheKind) -> set[tuple[str, st
     return from_csv | _manifest_slots_as_pairs(kind)
 
 
-def get_recent_refresh_months(n: int = 1) -> list[str]:
-    """현재월 등 최근 N개월 YYYYMM (지연 신고 반영용 재수집). 기본값 1=이번 달만."""
+def get_recent_refresh_months(n: int = 2) -> list[str]:
+    """현재월·직전월 등 최근 N개월 YYYYMM (30일 신고 지연 반영용 재수집)."""
     months = generate_month_range(get_data_start_ymd())
     if not months:
         return []
@@ -1074,11 +1074,11 @@ def plan_incremental_update_tasks(
     kind: CacheKind,
     lawd_codes: list[str],
     all_months: list[str],
-    recent_n: int = 1,
+    recent_n: int = 2,
 ) -> tuple[list[tuple[str, str]], set[tuple[str, str]]]:
     """
     차분 수집 작업 목록.
-    - 최근 recent_n개월(기본 1=현재월): 항상 재수집(덮어쓰기)
+    - 최근 recent_n개월(기본 2=현재월+직전월): 항상 재수집(덮어쓰기)
     - 그 외: filled에 없는 누락 슬롯만
     """
     filled = get_filled_slots(cached, kind)
@@ -1671,7 +1671,7 @@ def update_cache(
             kind="sale",
             lawd_codes=lawd_codes,
             all_months=all_months,
-            recent_n=1,
+            recent_n=2,
         )
         if refresh_slots:
             cached = drop_cache_slots(cached, refresh_slots)
@@ -1682,7 +1682,7 @@ def update_cache(
     try:
         print(
             f"[START] [매매] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+현재월)'})",
+            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):

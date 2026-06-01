@@ -41,7 +41,7 @@ def write_update_status(
 
 
 def reset_update_status(
-    message: str = "최근 1개월 누락 데이터를 확인하고 수집 중입니다...",
+    message: str = "최근 2개월 누락 데이터를 확인하고 수집 중입니다...",
 ) -> None:
     write_update_status(0.0, message, running=True, done=False, error=None)
 

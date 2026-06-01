@@ -503,7 +503,7 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
     st.session_state.incremental_update_running = True
 
 
-_UPDATE_SPINNER_MSG = "최근 1개월 누락 데이터를 확인하고 수집 중입니다..."
+_UPDATE_SPINNER_MSG = "최근 2개월 누락 데이터를 확인하고 수집 중입니다..."
 
 
 def _poll_incremental_update() -> None:
@@ -1303,7 +1303,7 @@ def _render_sidebar(
 
         st.caption(
             f"{len(_as_list(config.LAWD_CD))}개 구역 · "
-            "누락 월 보충 + 이번 달 자동 재수집"
+            "누락 월 보충 + 최근 2개월 자동 재수집"
         )
 
         st.divider()
