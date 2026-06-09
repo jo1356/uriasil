@@ -11,6 +11,9 @@ REGION_NAME = ["서초구", "강남구", "송파구", "영등포구"]
 # 데이터 수집 시작월 (2014년 1월부터)
 DATA_START_YMD = "201401"
 
+# 차분 수집 시 항상 API 재수집·덮어쓰기할 최근 월 수 (현재월+직전월=2)
+RECENT_REFRESH_MONTHS = 2
+
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
 CRAWL_DATA_VERSION = "v12_smart_incremental_update"
 

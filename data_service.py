@@ -459,12 +459,12 @@ def get_sinbanpo2_area_rules() -> list[tuple[str, float, float]]:
 
 
 def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
-    """신반포2차 전용: 68㎡대→24평형, 107㎡대→34평형, 그 외 제외."""
+    """신반포2차 전용: 68㎡대→24평형(22평), 107㎡대→34평형(35평), 그 외 제외."""
     if area_m2 is None or pd.isna(area_m2):
         return None
     m2 = float(area_m2)
     for label, lo, hi in get_sinbanpo2_area_rules():
-        if lo <= m2 < hi:
+        if lo <= m2 <= hi:
             return label
     return None
 
@@ -1111,6 +1111,67 @@ def plan_incremental_update_tasks(
     return tasks, refresh_slots
 
 
+def _recent_refresh_month_count() -> int:
+    return int(getattr(config, "RECENT_REFRESH_MONTHS", 2))
+
+
+def prepare_incremental_cache_update(
+    cached: pd.DataFrame,
+    *,
+    kind: CacheKind,
+    lawd_codes: list[str],
+    as_of: datetime | None = None,
+    recent_n: int | None = None,
+) -> tuple[
+    pd.DataFrame,
+    list[tuple[str, str]],
+    set[tuple[str, str]],
+    datetime,
+    list[str],
+    list[str],
+    int,
+]:
+    """
+    차분 수집 공통 준비 — 호출 시점 기준 최근 N개월 슬롯 삭제 후 재수집 작업 목록 반환.
+    매매·전월세 update_cache / update_rent_cache 에서 동일하게 사용.
+    """
+    ref = as_of or datetime.now()
+    n = recent_n if recent_n is not None else _recent_refresh_month_count()
+    all_months = generate_month_range(get_data_start_ymd(), end=ref)
+    recent_months = get_recent_refresh_months(n, as_of=ref)
+    tasks, refresh_slots = plan_incremental_update_tasks(
+        cached=cached,
+        kind=kind,
+        lawd_codes=lawd_codes,
+        all_months=all_months,
+        recent_n=n,
+        as_of=ref,
+    )
+    before = len(cached)
+    if refresh_slots:
+        cached = drop_cache_slots(cached, refresh_slots)
+    dropped = before - len(cached)
+    return cached, tasks, refresh_slots, ref, recent_months, all_months, dropped
+
+
+def log_incremental_refresh_plan(
+    kind_label: str,
+    *,
+    as_of: datetime,
+    recent_months: list[str],
+    refresh_slots: set[tuple[str, str]],
+    dropped_rows: int,
+    lawd_count: int,
+) -> None:
+    ym_labels = ", ".join(f"{m[:4]}.{m[4:]}" for m in recent_months)
+    print(
+        f"[REFRESH] [{kind_label}] 강제 덮어쓰기 {len(recent_months)}개월 "
+        f"({ym_labels}) · {lawd_count}개 구 · {len(refresh_slots)}슬롯 · "
+        f"기존 {dropped_rows:,}건 삭제 · 기준 {as_of:%Y-%m-%d %H:%M}",
+        flush=True,
+    )
+
+
 def drop_cache_slots(
     df: pd.DataFrame,
     slots: set[tuple[str, str]],
@@ -1574,6 +1635,8 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
             chunk["아파트"] = display_name
         if display_name == str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지")):
             chunk["아파트"] = display_name
+        if display_name == str(getattr(config, "SINBANPO2_LABEL", "신반포2차")):
+            chunk["아파트"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()
 
@@ -1653,7 +1716,6 @@ def update_cache(
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
     as_of = datetime.now()
-    all_months = generate_month_range(get_data_start_ymd(), end=as_of)
 
     if crawl_version_changed() and not force_rebuild:
         try:
@@ -1663,8 +1725,10 @@ def update_cache(
             _log_row_parse_error("version_reprocess_sale", exc)
 
     refresh_slots: set[tuple[str, str]] = set()
+    recent_months: list[str] = []
 
     if force_rebuild:
+        all_months = generate_month_range(get_data_start_ymd(), end=as_of)
         clear_cache_file()
         clear_slot_manifest("sale")
         cached = pd.DataFrame()
@@ -1672,17 +1736,28 @@ def update_cache(
         refresh_slots = set()
     else:
         cached = load_cached_data()
-        cached = enforce_strict_pyeong_on_dataframe(cached) if not cached.empty else cached
-        tasks, refresh_slots = plan_incremental_update_tasks(
-            cached=cached,
+        (
+            cached,
+            tasks,
+            refresh_slots,
+            as_of,
+            recent_months,
+            all_months,
+            dropped,
+        ) = prepare_incremental_cache_update(
+            cached,
             kind="sale",
             lawd_codes=lawd_codes,
-            all_months=all_months,
-            recent_n=2,
             as_of=as_of,
         )
-        if refresh_slots:
-            cached = drop_cache_slots(cached, refresh_slots)
+        log_incremental_refresh_plan(
+            "매매",
+            as_of=as_of,
+            recent_months=recent_months,
+            refresh_slots=refresh_slots,
+            dropped_rows=dropped,
+            lawd_count=len(lawd_codes),
+        )
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
@@ -1808,28 +1883,39 @@ def get_latest_contract_date_str(df: pd.DataFrame | None) -> str | None:
     return f"{latest[:4]}-{latest[4:6]}-{latest[6:8]}"
 
 
+def print_rent_collection_latest_date_debug(rent_df: pd.DataFrame | None = None) -> None:
+    """전월세 수집 완료 후 stdout에 최신 계약일 확인 로그."""
+    latest = get_latest_contract_date_str(rent_df)
+    if not latest:
+        print(
+            "✅ 국토부 전월세 수집 완료: 캐시에 계약일자가 없어 최신 거래일을 확인할 수 없습니다.",
+            flush=True,
+        )
+        return
+    print(
+        f"✅ 국토부 전월세 수집 완료: 최신 거래일은 {latest} 입니다.",
+        flush=True,
+    )
+
+
 def print_collection_latest_date_debug(
     *,
     sale_df: pd.DataFrame | None = None,
     rent_df: pd.DataFrame | None = None,
 ) -> None:
     """수집·갱신 완료 후 stdout에 최신 실거래일 확인 로그."""
-    candidates = [
-        get_latest_contract_date_str(sale_df),
-        get_latest_contract_date_str(rent_df),
-    ]
-    dates = [d for d in candidates if d]
-    if not dates:
+    sale_latest = get_latest_contract_date_str(sale_df)
+    if sale_latest:
+        print(
+            f"✅ 국토부 매매 수집 완료: 최신 거래일은 {sale_latest} 입니다.",
+            flush=True,
+        )
+    print_rent_collection_latest_date_debug(rent_df)
+    if not sale_latest and not get_latest_contract_date_str(rent_df):
         print(
             "✅ 국토부 API 수집 완료: 캐시에 계약일자 데이터가 없어 최신 거래일을 확인할 수 없습니다.",
             flush=True,
         )
-        return
-    latest_date = max(dates)
-    print(
-        f"✅ 국토부 API 수집 완료: 현재 서버 기준 가장 최근 실거래일은 {latest_date} 입니다.",
-        flush=True,
-    )
 
 
 def run_smart_incremental_update(

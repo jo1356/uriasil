@@ -272,16 +272,29 @@ def filter_new_market_rent_contracts(df: pd.DataFrame) -> pd.DataFrame:
     """
     전월세 노이즈 제거:
     - 계약구분: '신규'만 유지 (NaN/공백은 과거 데이터로 간주해 유지)
+    - 월세(만원)>0 실거래는 계약구분과 무관하게 유지 (뒤늦게 신고된 갱신 월세 누락 방지)
     - 갱신요구권사용(여부): '사용'은 삭제 (NaN/공백은 유지)
     """
     if df.empty:
         return df
     out = df.copy()
 
+    if "월세(만원)" in out.columns:
+        monthly = pd.to_numeric(out["월세(만원)"], errors="coerce").fillna(0)
+        is_monthly_lease = monthly > 0
+    else:
+        is_monthly_lease = pd.Series(False, index=out.index)
+
     if "계약구분" in out.columns:
         raw_contract = out["계약구분"]
         contract = raw_contract.astype(str).str.strip()
-        keep_new_or_empty = raw_contract.isna() | contract.eq("") | contract.eq("nan") | contract.eq("신규")
+        keep_new_or_empty = (
+            raw_contract.isna()
+            | contract.eq("")
+            | contract.eq("nan")
+            | contract.eq("신규")
+            | is_monthly_lease
+        )
         out = out[keep_new_or_empty].copy()
 
     rr_cols = [c for c in ("갱신요구권사용여부", "갱신요구권사용") if c in out.columns]
@@ -411,11 +424,18 @@ def _resolve_rent_cache_path() -> Path:
     return RENT_CACHE_CSV
 
 
-def load_cached_rent_data() -> pd.DataFrame:
+def load_rent_cache_raw() -> pd.DataFrame:
+    """수집·차분 업데이트용 — CSV 원본 (purge/평형 재적용 전)."""
     path = _resolve_rent_cache_path()
     if not path.exists():
         return pd.DataFrame()
-    raw = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    return pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+
+
+def load_cached_rent_data() -> pd.DataFrame:
+    raw = load_rent_cache_raw()
+    if raw.empty:
+        return raw
     return purge_rent_sale_cross_contamination(filter_rent_transactions(raw))
 
 
@@ -439,15 +459,14 @@ def update_rent_cache(
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
     as_of = datetime.now()
-    all_months = generate_month_range(get_data_start_ymd(), end=as_of)
 
     from data_service import (
         clear_slot_manifest,
         crawl_version_changed,
-        drop_cache_slots,
-        get_filled_slots,
+        log_incremental_refresh_plan,
         mark_slots_fetched,
-        plan_incremental_update_tasks,
+        prepare_incremental_cache_update,
+        print_rent_collection_latest_date_debug,
         reprocess_rent_cache,
         _write_crawl_version_stamp,
     )
@@ -460,29 +479,38 @@ def update_rent_cache(
             _log_row_parse_error("version_reprocess_rent", exc)
 
     refresh_slots: set[tuple[str, str]] = set()
+    recent_months: list[str] = []
 
     if force_rebuild:
+        all_months = generate_month_range(get_data_start_ymd(), end=as_of)
         clear_rent_cache_file()
         clear_slot_manifest("rent")
         cached = pd.DataFrame()
         tasks = [(lawd, ym) for lawd in lawd_codes for ym in all_months]
     else:
-        cached = load_cached_rent_data()
-        cached = (
-            enforce_strict_pyeong_on_rent_dataframe(cached)
-            if not cached.empty
-            else cached
-        )
-        tasks, refresh_slots = plan_incremental_update_tasks(
-            cached=cached,
+        cached = load_rent_cache_raw()
+        (
+            cached,
+            tasks,
+            refresh_slots,
+            as_of,
+            recent_months,
+            all_months,
+            dropped,
+        ) = prepare_incremental_cache_update(
+            cached,
             kind="rent",
             lawd_codes=lawd_codes,
-            all_months=all_months,
-            recent_n=2,
             as_of=as_of,
         )
-        if refresh_slots:
-            cached = drop_cache_slots(cached, refresh_slots)
+        log_incremental_refresh_plan(
+            "전월세",
+            as_of=as_of,
+            recent_months=recent_months,
+            refresh_slots=refresh_slots,
+            dropped_rows=dropped,
+            lawd_count=len(lawd_codes),
+        )
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
@@ -621,6 +649,7 @@ def update_rent_cache(
         progress(1.0, f"[전월세] 완료 - 총 {len(cached):,}건")
 
     print(f"[DONE] [전월세] 수집 완료 - 총 {len(cached):,}건", flush=True)
+    print_rent_collection_latest_date_debug(cached)
     return cached
 
 
@@ -653,8 +682,10 @@ def prepare_rent_dashboard_data(
 
 
 def rent_cache_status() -> dict:
+    from datetime import datetime
+
     cached = load_cached_rent_data()
-    months = generate_month_range(get_data_start_ymd())
+    months = generate_month_range(get_data_start_ymd(), end=datetime.now())
     lawd_codes = _as_list(config.LAWD_CD)
     total_slots = len(months) * len(lawd_codes)
     from data_service import get_filled_slots

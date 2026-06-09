@@ -18,6 +18,7 @@ from data_service import (
     cache_status,
     load_cached_data,
     print_collection_latest_date_debug,
+    print_rent_collection_latest_date_debug,
     rebuild_cache_from_scratch,
     refresh_local_cache_files,
     run_smart_incremental_update,
@@ -104,7 +105,7 @@ def main() -> None:
             else:
                 df = update_rent_cache(progress)
             print(f"\n  전월세 완료: {len(df):,}건\n", flush=True)
-            print_collection_latest_date_debug(rent_df=df)
+            print_rent_collection_latest_date_debug(df)
             finish_update_status()
             return
 
