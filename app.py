@@ -40,7 +40,7 @@ from rent_service import (
 from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
-_DATA_CACHE_VERSION = "v48_rent_purge_all_apts"
+_DATA_CACHE_VERSION = "v49_global_rent_rolling_fetch"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 

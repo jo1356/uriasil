@@ -1129,7 +1129,6 @@ def prepare_incremental_cache_update(
     datetime,
     list[str],
     list[str],
-    int,
 ]:
     """
     차분 수집 공통 준비 — 호출 시점 기준 최근 N개월 슬롯 삭제 후 재수집 작업 목록 반환.
@@ -1147,11 +1146,7 @@ def prepare_incremental_cache_update(
         recent_n=n,
         as_of=ref,
     )
-    before = len(cached)
-    if refresh_slots:
-        cached = drop_cache_slots(cached, refresh_slots)
-    dropped = before - len(cached)
-    return cached, tasks, refresh_slots, ref, recent_months, all_months, dropped
+    return cached, tasks, refresh_slots, ref, recent_months, all_months
 
 
 def log_incremental_refresh_plan(
@@ -1160,14 +1155,13 @@ def log_incremental_refresh_plan(
     as_of: datetime,
     recent_months: list[str],
     refresh_slots: set[tuple[str, str]],
-    dropped_rows: int,
     lawd_count: int,
 ) -> None:
     ym_labels = ", ".join(f"{m[:4]}.{m[4:]}" for m in recent_months)
     print(
-        f"[REFRESH] [{kind_label}] 강제 덮어쓰기 {len(recent_months)}개월 "
+        f"[REFRESH] [{kind_label}] 동적 2개월 강제 재수집 "
         f"({ym_labels}) · {lawd_count}개 구 · {len(refresh_slots)}슬롯 · "
-        f"기존 {dropped_rows:,}건 삭제 · 기준 {as_of:%Y-%m-%d %H:%M}",
+        f"기준 {as_of:%Y-%m-%d %H:%M} (슬롯별 API 성공 후 덮어쓰기)",
         flush=True,
     )
 
@@ -1346,30 +1340,18 @@ def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
 def reprocess_rent_cache(*, import_supplemental: bool = False) -> pd.DataFrame:
     """기존 전월세 캐시 — 전월세 전용 평형 재적용 후 저장 (매매 파이프라인과 분리)."""
     from rent_service import (
+        dedupe_rent_cache_rows,
         enforce_strict_pyeong_on_rent_dataframe,
         load_cached_rent_data,
+        purge_rent_sale_cross_contamination,
         save_cached_rent_data,
     )
 
     cached = load_cached_rent_data()
     if not cached.empty:
         cached = enforce_strict_pyeong_on_rent_dataframe(cached)
-        from rent_service import purge_rent_sale_cross_contamination
-
         cached = purge_rent_sale_cross_contamination(cached)
-        cached = cached.drop_duplicates(
-            subset=[
-                "조회지역코드",
-                "조회계약년월",
-                "아파트",
-                "계약일자",
-                "보증금(만원)",
-                "월세(만원)",
-                "전용면적(㎡)",
-                "층",
-            ],
-            keep="last",
-        )
+        cached = dedupe_rent_cache_rows(cached)
         save_cached_rent_data(cached)
     if import_supplemental:
         import_supplemental_rent_csv()
@@ -1743,7 +1725,6 @@ def update_cache(
             as_of,
             recent_months,
             all_months,
-            dropped,
         ) = prepare_incremental_cache_update(
             cached,
             kind="sale",
@@ -1755,7 +1736,6 @@ def update_cache(
             as_of=as_of,
             recent_months=recent_months,
             refresh_slots=refresh_slots,
-            dropped_rows=dropped,
             lawd_count=len(lawd_codes),
         )
 
@@ -1819,8 +1799,13 @@ def update_cache(
         if progress:
             progress(idx / max(total_tasks, 1), msg)
 
+        slot = (lawd_cd, deal_ymd)
+        fetch_ok = False
         try:
             chunk = fetch_apt_trade_data(service_key, lawd_cd, deal_ymd)
+            fetch_ok = True
+            if slot in refresh_slots:
+                cached = drop_cache_slots(cached, {slot})
             if chunk is not None and not chunk.empty:
                 chunk = chunk.copy()
                 chunk["조회지역코드"] = lawd_cd
@@ -1834,7 +1819,8 @@ def update_cache(
                     f"오류({deal_ymd}): {exc} — 다음 월로 진행",
                 )
         finally:
-            mark_slots_fetched("sale", [(lawd_cd, deal_ymd)])
+            if fetch_ok:
+                mark_slots_fetched("sale", [slot])
             time.sleep(API_SLEEP_SEC)
 
         next_lawd = tasks[idx][0] if idx < len(tasks) else None
@@ -1884,16 +1870,16 @@ def get_latest_contract_date_str(df: pd.DataFrame | None) -> str | None:
 
 
 def print_rent_collection_latest_date_debug(rent_df: pd.DataFrame | None = None) -> None:
-    """전월세 수집 완료 후 stdout에 최신 계약일 확인 로그."""
+    """전월세 수집 완료 후 stdout에 글로벌 최신 계약일 확인 로그."""
     latest = get_latest_contract_date_str(rent_df)
     if not latest:
         print(
-            "✅ 국토부 전월세 수집 완료: 캐시에 계약일자가 없어 최신 거래일을 확인할 수 없습니다.",
+            "✅ 글로벌 전월세 수집 완료: 캐시에 계약일자가 없어 최신 거래일을 확인할 수 없습니다.",
             flush=True,
         )
         return
     print(
-        f"✅ 국토부 전월세 수집 완료: 최신 거래일은 {latest} 입니다.",
+        f"✅ 글로벌 전월세 수집 완료: 전체 단지 기준 최신 전월세 거래일은 {latest} 입니다.",
         flush=True,
     )
 
