@@ -1796,6 +1796,42 @@ def update_cache(
     return cached
 
 
+def get_latest_contract_date_str(df: pd.DataFrame | None) -> str | None:
+    """캐시 DataFrame에서 가장 최근 계약일자 (YYYY-MM-DD)."""
+    if df is None or df.empty or "계약일자" not in df.columns:
+        return None
+    digits = df["계약일자"].astype(str).str.replace(r"\D", "", regex=True)
+    valid = digits[digits.str.len() >= 8]
+    if valid.empty:
+        return None
+    latest = valid.max()
+    return f"{latest[:4]}-{latest[4:6]}-{latest[6:8]}"
+
+
+def print_collection_latest_date_debug(
+    *,
+    sale_df: pd.DataFrame | None = None,
+    rent_df: pd.DataFrame | None = None,
+) -> None:
+    """수집·갱신 완료 후 stdout에 최신 실거래일 확인 로그."""
+    candidates = [
+        get_latest_contract_date_str(sale_df),
+        get_latest_contract_date_str(rent_df),
+    ]
+    dates = [d for d in candidates if d]
+    if not dates:
+        print(
+            "✅ 국토부 API 수집 완료: 캐시에 계약일자 데이터가 없어 최신 거래일을 확인할 수 없습니다.",
+            flush=True,
+        )
+        return
+    latest_date = max(dates)
+    print(
+        f"✅ 국토부 API 수집 완료: 현재 서버 기준 가장 최근 실거래일은 {latest_date} 입니다.",
+        flush=True,
+    )
+
+
 def run_smart_incremental_update(
     progress: ProgressCallback = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:

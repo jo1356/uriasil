@@ -16,12 +16,15 @@ import config
 from update_status import finish_update_status, reset_update_status, write_update_status
 from data_service import (
     cache_status,
+    load_cached_data,
+    print_collection_latest_date_debug,
     rebuild_cache_from_scratch,
     refresh_local_cache_files,
     run_smart_incremental_update,
     validate_service_key,
 )
 from rent_service import (
+    load_cached_rent_data,
     rebuild_rent_cache_from_scratch,
     rent_cache_status,
     update_rent_cache,
@@ -72,6 +75,10 @@ def main() -> None:
     if args.reprocess:
         stats = refresh_local_cache_files(import_supplemental=False)
         print(f"\n  재처리 완료: 매매 {stats['sale_rows']:,}건 / 전월세 {stats['rent_rows']:,}건\n")
+        print_collection_latest_date_debug(
+            sale_df=load_cached_data(),
+            rent_df=load_cached_rent_data(),
+        )
         return
 
     validate_service_key()
@@ -97,6 +104,7 @@ def main() -> None:
             else:
                 df = update_rent_cache(progress)
             print(f"\n  전월세 완료: {len(df):,}건\n", flush=True)
+            print_collection_latest_date_debug(rent_df=df)
             finish_update_status()
             return
 
@@ -115,6 +123,7 @@ def main() -> None:
             f"/ 전월세: {rent_status['filled_slots']}/{rent_status['total_slots']}",
             flush=True,
         )
+        print_collection_latest_date_debug(sale_df=sale_df, rent_df=rent_df)
         finish_update_status()
     except Exception as exc:
         finish_update_status(error=str(exc))
