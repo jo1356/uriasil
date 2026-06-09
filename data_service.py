@@ -1060,9 +1060,14 @@ def get_filled_slots(cached: pd.DataFrame, kind: CacheKind) -> set[tuple[str, st
     return from_csv | _manifest_slots_as_pairs(kind)
 
 
-def get_recent_refresh_months(n: int = 2) -> list[str]:
-    """현재월·직전월 등 최근 N개월 YYYYMM (30일 신고 지연 반영용 재수집)."""
-    months = generate_month_range(get_data_start_ymd())
+def get_recent_refresh_months(
+    n: int = 2,
+    *,
+    as_of: datetime | None = None,
+) -> list[str]:
+    """현재월·직전월 등 최근 N개월 YYYYMM (호출 시점 기준, 30일 신고 지연 반영용 재수집)."""
+    ref = as_of or datetime.now()
+    months = generate_month_range(get_data_start_ymd(), end=ref)
     if not months:
         return []
     return months[-n:] if len(months) >= n else list(months)
@@ -1075,6 +1080,7 @@ def plan_incremental_update_tasks(
     lawd_codes: list[str],
     all_months: list[str],
     recent_n: int = 2,
+    as_of: datetime | None = None,
 ) -> tuple[list[tuple[str, str]], set[tuple[str, str]]]:
     """
     차분 수집 작업 목록.
@@ -1082,7 +1088,7 @@ def plan_incremental_update_tasks(
     - 그 외: filled에 없는 누락 슬롯만
     """
     filled = get_filled_slots(cached, kind)
-    recent_months = get_recent_refresh_months(recent_n)
+    recent_months = get_recent_refresh_months(recent_n, as_of=as_of)
     refresh_slots = {(lawd, ym) for lawd in lawd_codes for ym in recent_months}
 
     tasks: list[tuple[str, str]] = []
@@ -1646,7 +1652,8 @@ def update_cache(
     """
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
-    all_months = generate_month_range(get_data_start_ymd())
+    as_of = datetime.now()
+    all_months = generate_month_range(get_data_start_ymd(), end=as_of)
 
     if crawl_version_changed() and not force_rebuild:
         try:
@@ -1672,6 +1679,7 @@ def update_cache(
             lawd_codes=lawd_codes,
             all_months=all_months,
             recent_n=2,
+            as_of=as_of,
         )
         if refresh_slots:
             cached = drop_cache_slots(cached, refresh_slots)

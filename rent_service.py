@@ -434,9 +434,12 @@ def update_rent_cache(
     progress: ProgressCallback = None,
     force_rebuild: bool = False,
 ) -> pd.DataFrame:
+    from datetime import datetime
+
     service_key = validate_service_key()
     lawd_codes = _as_list(config.LAWD_CD)
-    all_months = generate_month_range(get_data_start_ymd())
+    as_of = datetime.now()
+    all_months = generate_month_range(get_data_start_ymd(), end=as_of)
 
     from data_service import (
         clear_slot_manifest,
@@ -476,6 +479,7 @@ def update_rent_cache(
             lawd_codes=lawd_codes,
             all_months=all_months,
             recent_n=2,
+            as_of=as_of,
         )
         if refresh_slots:
             cached = drop_cache_slots(cached, refresh_slots)

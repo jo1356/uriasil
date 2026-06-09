@@ -434,6 +434,8 @@ def _prepare_comparison_chart_df(
 
 
 def _clear_data_caches() -> None:
+    """수집 완료 후 Streamlit 메모리 캐시 전부 무효화."""
+    st.cache_data.clear()
     get_prepared_sale_data.clear()
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
@@ -504,7 +506,7 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
 
 
 def _poll_incremental_update() -> None:
-    """별도 프로세스 수집 진행 — 사이드바에는 심플한 안내만 표시."""
+    """별도 프로세스 수집 진행 — 완료 시 캐시 삭제 후 즉시 rerun."""
     from update_status import read_update_status
 
     _init_incremental_update_session()
@@ -517,19 +519,22 @@ def _poll_incremental_update() -> None:
     running = bool(status.get("running")) or proc_alive
 
     if running and not status.get("done"):
-        with st.spinner(_UPDATE_SPINNER_MSG):
+        with st.sidebar.spinner(_UPDATE_SPINNER_MSG):
             time.sleep(1.5)
         st.rerun()
-        return
 
     st.session_state.incremental_update_running = False
     st.session_state.incremental_update_pid = None
+
+    if not status.get("done") and not status.get("error"):
+        return
+
     _clear_data_caches()
     err = status.get("error")
     if err:
-        st.error(str(err))
+        st.sidebar.error(str(err))
     elif status.get("done"):
-        st.success("매매·전월세 업데이트 완료")
+        st.sidebar.success("매매·전월세 업데이트 완료")
     st.rerun()
 
 
@@ -1345,8 +1350,6 @@ def _render_sidebar(
         st.divider()
         st.subheader("📥 데이터 수집")
 
-        _poll_incremental_update()
-
         _init_incremental_update_session()
         update_disabled = bool(st.session_state.incremental_update_running)
 
@@ -1591,6 +1594,9 @@ def main() -> None:
 
     _reset_ui_session_if_data_version_changed()
     _reset_ui_session_if_selection_policy_changed()
+
+    _init_incremental_update_session()
+    _poll_incremental_update()
 
     data_file_fp = _data_file_fingerprint()
     sale_status = cache_status()
