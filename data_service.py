@@ -81,6 +81,8 @@ PYEONG_STRING_TO_GROUP: dict[str, str] = {
     "29평": "34평형",
     "22평": "24평형",
     "35평": "34평형",
+    "25평": "24평형",
+    "32평": "34평형",
 }
 ALLOWED_DISPLAY_PYEONG = frozenset(PYEONG_STRING_TO_GROUP.keys())
 
@@ -100,6 +102,10 @@ _GAEPO_WOOSUNG_APT_RE = re.compile(
 )
 _SINHYUNDAI_APT_RE = re.compile(
     str(getattr(config, "SINHYUNDAI_APT_REGEX", r"신현대(?:9|11|12)?|현대\s*(?:9|11|12)\s*차?")),
+    re.IGNORECASE,
+)
+_DH_BANGBAE_APT_RE = re.compile(
+    str(getattr(config, "DH_BANGBAE_APT_REGEX", r"^디에이치\s*방배$|^디에이치방배$|^디에이치$")),
     re.IGNORECASE,
 )
 
@@ -283,6 +289,8 @@ def is_area_in_collection_whitelist(
         return assign_jamsil_jugong5_pyeong_group(m2) is not None
     if is_sinbanpo2_apartment(dong_s, apt_s):
         return assign_sinbanpo2_pyeong_group(m2) is not None
+    if is_dh_bangbae_apartment(dong_s, apt_s):
+        return assign_dh_bangbae_pyeong_group(m2) is not None
 
     for rule in getattr(config, "COLLECTION_AREA_WHITELIST", []):
         if rule.get("kind") != "standard":
@@ -315,6 +323,10 @@ def display_pyeong_for_apartment(apt_name: str, pyeong_group: str) -> str:
     sambu = str(getattr(config, "SAMBU_APT_NAME", "삼부"))
     if sambu in apt:
         return str(getattr(config, "SAMBU_PYEONG_DISPLAY", {}).get(pg, pg))
+    dh_label = str(getattr(config, "DH_BANGBAE_LABEL", "디에이치 방배"))
+    dh_name = str(getattr(config, "DH_BANGBAE_APT_NAME", "디에이치방배"))
+    if dh_label in apt or apt == dh_name:
+        return str(getattr(config, "DH_BANGBAE_PYEONG_DISPLAY", {}).get(pg, pg))
     return pg
 
 
@@ -426,6 +438,10 @@ def resolve_apt_for_pyeong_rules(
     sb_name = str(getattr(config, "SINBANPO2_APT_NAME", "신반포2"))
     if display == sb_label:
         return sb_name
+    dh_label = str(getattr(config, "DH_BANGBAE_LABEL", "디에이치 방배"))
+    dh_name = str(getattr(config, "DH_BANGBAE_APT_NAME", "디에이치방배"))
+    if display == dh_label:
+        return dh_name
     gw_label = str(getattr(config, "GAEPO_WOOSUNG_LABEL", "개포우성 1,2차"))
     if display == gw_label:
         return api_name or gw_label
@@ -465,6 +481,47 @@ def assign_sinbanpo2_pyeong_group(area_m2: float) -> str | None:
     m2 = float(area_m2)
     for label, lo, hi in get_sinbanpo2_area_rules():
         if lo <= m2 <= hi:
+            return label
+    return None
+
+
+def is_dh_bangbae_apartment(dong: str, apt: str) -> bool:
+    """서초구 방배동 디에이치 방배 — API 명칭 디에이치방배·디에이치 등."""
+    dh_dong = str(getattr(config, "DH_BANGBAE_DONG", "방배동"))
+    if dh_dong not in str(dong):
+        return False
+    apt_text = _safe_str(apt)
+    if not apt_text:
+        return False
+    dh_label = str(getattr(config, "DH_BANGBAE_LABEL", "디에이치 방배"))
+    dh_name = str(getattr(config, "DH_BANGBAE_APT_NAME", "디에이치방배"))
+    apt_norm = re.sub(r"\s+", "", apt_text)
+    if apt_norm in (
+        re.sub(r"\s+", "", dh_label),
+        re.sub(r"\s+", "", dh_name),
+    ):
+        return True
+    if _DH_BANGBAE_APT_RE.search(apt_text):
+        return True
+    return False
+
+
+def get_dh_bangbae_area_rules() -> list[tuple[str, float, float]]:
+    raw = getattr(
+        config,
+        "DH_BANGBAE_AREA_RULES",
+        [("24평형", 57.0, 63.0), ("34평형", 82.0, 87.0)],
+    )
+    return [(str(label), float(lo), float(hi)) for label, lo, hi in raw]
+
+
+def assign_dh_bangbae_pyeong_group(area_m2: float) -> str | None:
+    """디에이치 방배: 57~63㎡→24평형(25평), 82~87㎡→34평형(32평)."""
+    if area_m2 is None or pd.isna(area_m2):
+        return None
+    m2 = float(area_m2)
+    for label, lo, hi in get_dh_bangbae_area_rules():
+        if lo <= m2 < hi:
             return label
     return None
 
@@ -593,6 +650,9 @@ def area_m2_to_pyeong_string(
     if is_sinbanpo2_apartment(dong_s, apt_s):
         group = assign_sinbanpo2_pyeong_group(m2)
         return display_pyeong_for_apartment(display_apt, group) if group else None
+    if is_dh_bangbae_apartment(dong_s, apt_s):
+        group = assign_dh_bangbae_pyeong_group(m2)
+        return display_pyeong_for_apartment(display_apt, group) if group else None
 
     if 57.0 <= m2 < 63.0:
         return "24평"
@@ -622,6 +682,8 @@ def assign_pyeong_group_from_m2(
         return assign_jamsil_jugong5_pyeong_group(area_m2)
     if is_sinbanpo2_apartment(dong, apt):
         return assign_sinbanpo2_pyeong_group(area_m2)
+    if is_dh_bangbae_apartment(dong, apt):
+        return assign_dh_bangbae_pyeong_group(area_m2)
     if is_gaepo_woosung_apartment(dong, apt):
         return assign_gaepo_woosung_pyeong_group(area_m2)
     if is_sinhyundai_apartment(dong, apt):
@@ -687,6 +749,11 @@ def is_allowed_area_m2(
         return False
     if is_sinbanpo2_apartment(dong, apt):
         for label, lo, hi in get_sinbanpo2_area_rules():
+            if label == group:
+                return lo <= m2 < hi
+        return False
+    if is_dh_bangbae_apartment(dong, apt):
+        for label, lo, hi in get_dh_bangbae_area_rules():
             if label == group:
                 return lo <= m2 < hi
         return False
@@ -939,6 +1006,7 @@ def row_matches_crawl_target(row: dict[str, str] | pd.Series) -> bool:
             or is_sambu_apartment(dong, apt)
             or is_jamsil_jugong5_apartment(dong, apt)
             or is_sinbanpo2_apartment(dong, apt)
+            or is_dh_bangbae_apartment(dong, apt)
         ):
             return True
         apt_norm = re.sub(r"\s+", "", apt)
@@ -1564,6 +1632,14 @@ def _target_row_mask(df: pd.DataFrame, target: TargetDict) -> pd.Series:
             ],
             index=df.index,
         )
+    if target.get("match_dh_bangbae"):
+        return pd.Series(
+            [
+                is_dh_bangbae_apartment(d, a)
+                for d, a in zip(dong_col, apt_series, strict=False)
+            ],
+            index=df.index,
+        )
     dong = target["dong"]
     name = target["name"]
     dong_mask = dong_col.str.contains(dong, case=False, na=False)
@@ -1618,6 +1694,8 @@ def filter_by_targets(df: pd.DataFrame, targets: list[TargetDict]) -> pd.DataFra
         if display_name == str(getattr(config, "JAMSIL_JUGONG5_LABEL", "잠실주공5단지")):
             chunk["아파트"] = display_name
         if display_name == str(getattr(config, "SINBANPO2_LABEL", "신반포2차")):
+            chunk["아파트"] = display_name
+        if display_name == str(getattr(config, "DH_BANGBAE_LABEL", "디에이치 방배")):
             chunk["아파트"] = display_name
         pieces.append(chunk)
     return pd.concat(pieces, ignore_index=True) if pieces else df.iloc[0:0].copy()

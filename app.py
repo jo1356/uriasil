@@ -40,7 +40,7 @@ from rent_service import (
 from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
-_DATA_CACHE_VERSION = "v49_global_rent_rolling_fetch"
+_DATA_CACHE_VERSION = "v50_dh_bangbae_preregister"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -85,6 +85,16 @@ _SINHYUNDAI_PYEONG_DISPLAY = getattr(
     "SINHYUNDAI_PYEONG_DISPLAY",
     {"34평형": "34평"},
 )
+_DH_BANGBAE_LABEL = getattr(config, "DH_BANGBAE_LABEL", "디에이치 방배")
+_DH_BANGBAE_APT_NAME = getattr(config, "DH_BANGBAE_APT_NAME", "디에이치방배")
+_DH_BANGBAE_PYEONG_DISPLAY = getattr(
+    config,
+    "DH_BANGBAE_PYEONG_DISPLAY",
+    {"24평형": "25평", "34평형": "32평"},
+)
+_DH_BANGBAE_EMPTY_DATA_MSG = (
+    "디에이치 방배 단지의 실거래 데이터가 아직 국토부에 등록되지 않았습니다."
+)
 
 # 사이드바·차트 범례 공통 단지 노출 순서 (표시명 기준)
 _SIDEBAR_APT_ORDER = getattr(
@@ -107,6 +117,8 @@ _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "신반포2": "신반포2차",
     "잠실주공5": "잠실주공5단지",
     "주공아파트 5단지": "잠실주공5단지",
+    "디에이치방배": "디에이치 방배",
+    "디에이치": "디에이치 방배",
 }
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
 _SIDEBAR_UI_VERSION = "인라인 HTML v3"
@@ -587,6 +599,7 @@ _MASTER_34_PYEONG_SELECTION: list[tuple[str, str]] = [
     ("개포우성 1,2차", "44평"),
     ("잠실주공5단지", "34평"),
     ("잠실주공5단지", "34평형"),
+    ("디에이치 방배", "32평"),
 ]
 
 
@@ -734,6 +747,17 @@ def _is_sinhyundai_apt(apt_name: str | None) -> bool:
     return _SINHYUNDAI_LABEL in str(apt_name)
 
 
+def _is_dh_bangbae_apt(apt_name: str | None) -> bool:
+    if not apt_name:
+        return False
+    text = str(apt_name)
+    return (
+        _DH_BANGBAE_LABEL in text
+        or text.strip() == _DH_BANGBAE_APT_NAME
+        or _canonical_sidebar_apt(text) == _DH_BANGBAE_LABEL
+    )
+
+
 def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
     """단지별 UI 평형 표기. value는 24평형/34평형 유지."""
     if apt_name and _is_jamsil_jugong5_apt(apt_name):
@@ -746,6 +770,8 @@ def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
         return _GAEPO_WOOSUNG_PYEONG_DISPLAY.get(pyeong, pyeong)
     if apt_name and _is_sinhyundai_apt(apt_name):
         return _SINHYUNDAI_PYEONG_DISPLAY.get(pyeong, pyeong)
+    if apt_name and _is_dh_bangbae_apt(apt_name):
+        return _DH_BANGBAE_PYEONG_DISPLAY.get(pyeong, pyeong)
     return pyeong
 
 
@@ -774,6 +800,9 @@ def _format_chart_label_display(label: str) -> str:
         return f"{apt} ({display_p})"
     if _is_sinhyundai_apt(apt):
         display_p = _SINHYUNDAI_PYEONG_DISPLAY.get(pyeong, pyeong)
+        return f"{apt} ({display_p})"
+    if _is_dh_bangbae_apt(apt):
+        display_p = _DH_BANGBAE_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
     return label
 
@@ -1568,7 +1597,13 @@ def _render_market_tab(
     st.divider()
 
     if view.empty:
-        st.warning("선택한 단지(평형)에 거래 데이터가 없습니다.")
+        dh_selected = any(
+            _is_dh_bangbae_apt(_extract_label_parts(lb)[0]) for lb in selected_series
+        )
+        if dh_selected:
+            st.info(_DH_BANGBAE_EMPTY_DATA_MSG)
+        else:
+            st.warning("선택한 단지(평형)에 거래 데이터가 없습니다.")
         return
 
     y_title = "환산 전세가" if is_rent else "거래금액"
