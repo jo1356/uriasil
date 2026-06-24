@@ -10,7 +10,7 @@ import html
 import os
 import subprocess
 import sys
-import time
+from datetime import timedelta
 from pathlib import Path
 
 import streamlit as st
@@ -497,14 +497,14 @@ def _init_incremental_update_session() -> None:
         st.session_state.incremental_update_pid = None
 
 
-_UPDATE_SPINNER_MSG = "최근 2개월 누락 데이터를 확인하고 수집 중입니다..."
+_UPDATE_PROGRESS_MSG = "국토부 최신 데이터를 수집 중입니다. (기존 데이터 조회 가능)"
 
 
 def _start_subprocess_fetch(*extra_args: str) -> None:
     """Streamlit과 분리된 OS 프로세스에서 fetch_data.py 실행."""
     from update_status import UPDATE_LOG_FILE, reset_update_status
 
-    reset_update_status(_UPDATE_SPINNER_MSG)
+    reset_update_status(_UPDATE_PROGRESS_MSG)
     log_path = UPDATE_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "w", encoding="utf-8")
@@ -521,23 +521,26 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
     st.session_state.incremental_update_running = True
 
 
-def _poll_incremental_update() -> None:
-    """별도 프로세스 수집 진행 — 완료 시 캐시 삭제 후 즉시 rerun."""
+@st.fragment(run_every=timedelta(seconds=2))
+def _poll_incremental_update_fragment() -> None:
+    """백그라운드 수집 완료 감지 — 메인 차트 렌더링과 독립적으로 폴링."""
     from update_status import read_update_status
 
     _init_incremental_update_session()
     if not st.session_state.incremental_update_running:
         return
 
+    if st.session_state.incremental_update_running:
+        st.status(_UPDATE_PROGRESS_MSG, state="running", expanded=False)
+        st.caption("메인 화면은 기존 캐시 데이터를 계속 표시합니다.")
+
     status = read_update_status()
     pid = st.session_state.get("incremental_update_pid")
     proc_alive = _is_pid_alive(pid)
-    running = bool(status.get("running")) or proc_alive
+    still_running = (bool(status.get("running")) or proc_alive) and not status.get("done")
 
-    if running and not status.get("done"):
-        with st.sidebar.spinner(_UPDATE_SPINNER_MSG):
-            time.sleep(1.5)
-        st.rerun()
+    if still_running:
+        return
 
     st.session_state.incremental_update_running = False
     st.session_state.incremental_update_pid = None
@@ -552,6 +555,48 @@ def _poll_incremental_update() -> None:
     elif status.get("done"):
         st.sidebar.success("매매·전월세 업데이트 완료")
     st.rerun()
+
+
+def _render_sidebar_update_controls() -> None:
+    """데이터 수집 버튼·진행 표시 — @st.fragment 폴링과 분리된 사이드바 UI."""
+    _init_incremental_update_session()
+    update_disabled = bool(st.session_state.incremental_update_running)
+
+    if st.button(
+        "🔄 데이터 업데이트",
+        use_container_width=True,
+        type="primary",
+        disabled=update_disabled,
+    ):
+        try:
+            validate_service_key()
+            _start_subprocess_fetch()
+            st.toast("데이터 업데이트를 백그라운드에서 진행합니다.")
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
+
+    _poll_incremental_update_fragment()
+
+    st.caption(
+        f"{len(_as_list(config.LAWD_CD))}개 구역 · "
+        "누락 월 보충 + 최근 2개월 자동 재수집"
+    )
+
+    st.divider()
+    st.caption("⚠️ 전체 재수집 (오래 걸림)")
+    if st.button(
+        "♻️ 캐시 초기화 후 전체 재수집",
+        use_container_width=True,
+        disabled=update_disabled,
+    ):
+        try:
+            validate_service_key()
+            _start_subprocess_fetch("--rebuild")
+            st.toast("데이터 업데이트를 백그라운드에서 진행합니다.")
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
 
 
 def _clear_series_selection_session() -> None:
@@ -1383,26 +1428,7 @@ def _render_sidebar(
         st.divider()
         st.subheader("📥 데이터 수집")
 
-        _init_incremental_update_session()
-        update_disabled = bool(st.session_state.incremental_update_running)
-
-        if st.button(
-            "🔄 데이터 업데이트",
-            use_container_width=True,
-            type="primary",
-            disabled=update_disabled,
-        ):
-            try:
-                validate_service_key()
-                _start_subprocess_fetch()
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-
-        st.caption(
-            f"{len(_as_list(config.LAWD_CD))}개 구역 · "
-            "누락 월 보충 + 최근 2개월 자동 재수집"
-        )
+        _render_sidebar_update_controls()
 
         st.divider()
         st.header("⚙️ 설정")
@@ -1428,20 +1454,6 @@ def _render_sidebar(
             )
         else:
             st.warning("전월세 캐시 없음")
-
-        st.divider()
-        st.caption("⚠️ 전체 재수집 (오래 걸림)")
-        if st.button(
-            "♻️ 캐시 초기화 후 전체 재수집",
-            use_container_width=True,
-            disabled=update_disabled,
-        ):
-            try:
-                validate_service_key()
-                _start_subprocess_fetch("--rebuild")
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
 
     return selected_series
 
@@ -1635,7 +1647,6 @@ def main() -> None:
     _reset_ui_session_if_selection_policy_changed()
 
     _init_incremental_update_session()
-    _poll_incremental_update()
 
     data_file_fp = _data_file_fingerprint()
     sale_status = cache_status()
