@@ -40,7 +40,7 @@ from rent_service import (
 from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
-_DATA_CACHE_VERSION = "v50_dh_bangbae_preregister"
+_DATA_CACHE_VERSION = "v51_supabase_db"
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -463,6 +463,18 @@ def _subprocess_env_with_service_key() -> dict[str, str]:
             env["SERVICE_KEY"] = secret
     except Exception:
         pass
+    try:
+        db_url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        if db_url:
+            env["DATABASE_URL"] = db_url
+    except Exception:
+        pass
+    if "DATABASE_URL" not in env:
+        from database import get_database_url
+
+        url = get_database_url()
+        if url:
+            env["DATABASE_URL"] = url
     return env
 
 

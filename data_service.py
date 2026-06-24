@@ -1029,21 +1029,17 @@ def row_matches_crawl_target(row: dict[str, str] | pd.Series) -> bool:
 
 
 def get_data_cache_fingerprint(*, app_cache_version: str = "") -> str:
-    """캐시 CSV 수정 시각·크기 해시 — Streamlit st.cache_data 무효화용."""
+    """Supabase 테이블 행 수·최신 계약일자 해시 — Streamlit st.cache_data 무효화용."""
     import hashlib
 
-    from rent_service import RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV
+    from database import RENTS_TABLE, SALES_TABLE, get_table_fingerprint
 
     parts: list[str] = [
         str(getattr(config, "CRAWL_DATA_VERSION", "")),
         str(app_cache_version),
+        get_table_fingerprint(SALES_TABLE),
+        get_table_fingerprint(RENTS_TABLE),
     ]
-    for path in (SALE_CACHE_CSV, LEGACY_SALE_CACHE_CSV, RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV):
-        if path.exists():
-            stat = path.stat()
-            parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
-        else:
-            parts.append(f"{path.name}:missing")
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
@@ -1733,23 +1729,25 @@ def _resolve_sale_cache_path() -> Path:
 
 
 def load_cached_data() -> pd.DataFrame:
-    path = _resolve_sale_cache_path()
-    if not path.exists():
-        return pd.DataFrame()
-    return filter_sale_transactions(
-        pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
-    )
+    from database import SALES_TABLE, read_table
+
+    raw = read_table(SALES_TABLE)
+    if raw.empty:
+        return raw
+    return filter_sale_transactions(raw)
 
 
 def save_cached_data(df: pd.DataFrame) -> None:
+    from database import SALE_DEDUP_COLUMNS, SALES_TABLE, write_table
+
     out = filter_sale_transactions(df)
-    out.to_csv(SALE_CACHE_CSV, index=False, encoding="utf-8-sig")
+    write_table(out, SALES_TABLE, dedup_columns=SALE_DEDUP_COLUMNS)
 
 
 def clear_cache_file() -> None:
-    for path in (SALE_CACHE_CSV, LEGACY_SALE_CACHE_CSV):
-        if path.exists():
-            path.unlink()
+    from database import SALES_TABLE, clear_table
+
+    clear_table(SALES_TABLE)
 
 
 def _region_label(lawd_cd: str, index: int) -> str:
@@ -1863,7 +1861,7 @@ def update_cache(
             if reason:
                 try:
                     print(
-                        f"[SAVE] [매매] 중간 저장 ({reason}) - 누적 {len(cached):,}건 -> sales_data.csv",
+                        f"[SAVE] [매매] 중간 저장 ({reason}) - 누적 {len(cached):,}건 -> apt_sales",
                         flush=True,
                     )
                 except Exception:
@@ -2135,6 +2133,8 @@ def _area_display(row: pd.Series) -> str:
 
 
 def cache_status() -> dict:
+    from database import SALES_TABLE, cache_storage_status
+
     cached = load_cached_data()
     months = generate_month_range(get_data_start_ymd())
     lawd_codes = _as_list(config.LAWD_CD)
@@ -2146,11 +2146,12 @@ def cache_status() -> dict:
         if months
         else ""
     )
+    storage = cache_storage_status(SALES_TABLE)
     return {
-        "exists": CACHE_CSV.exists(),
+        "exists": storage["exists"],
         "rows": len(cached),
         "filled_slots": filled,
         "total_slots": total_slots,
         "period": period,
-        "path": str(CACHE_CSV),
+        "path": storage["path"],
     }

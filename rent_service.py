@@ -465,11 +465,10 @@ def _resolve_rent_cache_path() -> Path:
 
 
 def load_rent_cache_raw() -> pd.DataFrame:
-    """수집·차분 업데이트용 — CSV 원본 (purge/평형 재적용 전)."""
-    path = _resolve_rent_cache_path()
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    """수집·차분 업데이트용 — DB 원본 (purge/평형 재적용 전)."""
+    from database import RENTS_TABLE, read_table
+
+    return read_table(RENTS_TABLE)
 
 
 def load_cached_rent_data() -> pd.DataFrame:
@@ -480,14 +479,16 @@ def load_cached_rent_data() -> pd.DataFrame:
 
 
 def save_cached_rent_data(df: pd.DataFrame) -> None:
+    from database import RENT_DEDUP_COLUMNS, RENTS_TABLE, write_table
+
     out = purge_rent_sale_cross_contamination(filter_rent_transactions(df))
-    out.to_csv(RENT_CACHE_CSV, encoding="utf-8-sig", index=False)
+    write_table(out, RENTS_TABLE, dedup_columns=RENT_DEDUP_COLUMNS)
 
 
 def clear_rent_cache_file() -> None:
-    for path in (RENT_CACHE_CSV, LEGACY_RENT_CACHE_CSV):
-        if path.exists():
-            path.unlink()
+    from database import RENTS_TABLE, clear_table
+
+    clear_table(RENTS_TABLE)
 
 
 def update_rent_cache(
@@ -579,7 +580,7 @@ def update_rent_cache(
             tag = f" ({reason})" if reason else ""
             print(
                 f"[SAVE] [전월세] 중간 저장{tag} - "
-                f"{before:,}→{len(cached):,}건 -> rent_data.csv",
+                f"{before:,}→{len(cached):,}건 -> apt_rents",
                 flush=True,
             )
         except Exception as exc:
@@ -701,6 +702,8 @@ def prepare_rent_dashboard_data(
 def rent_cache_status() -> dict:
     from datetime import datetime
 
+    from database import RENTS_TABLE, cache_storage_status
+
     cached = load_cached_rent_data()
     months = generate_month_range(get_data_start_ymd(), end=datetime.now())
     lawd_codes = _as_list(config.LAWD_CD)
@@ -714,11 +717,12 @@ def rent_cache_status() -> dict:
         if months
         else ""
     )
+    storage = cache_storage_status(RENTS_TABLE)
     return {
-        "exists": RENT_CACHE_CSV.exists(),
+        "exists": storage["exists"],
         "rows": len(cached),
         "filled_slots": filled,
         "total_slots": total_slots,
         "period": period,
-        "path": str(RENT_CACHE_CSV),
+        "path": storage["path"],
     }
