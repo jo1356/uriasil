@@ -115,11 +115,15 @@ def _attach_value_indices(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def build_raemian_usd_series(
-    _db_revision: str,
-    _sale_df: pd.DataFrame,
+    db_revision: str,
+    cache_version: str = "",
 ) -> pd.DataFrame:
-    """매매 데이터 + 환율 병합 + 달러 환산가 + 가치 지수."""
-    base = filter_raemian_firstige_34(_sale_df)
+    """매매 데이터 + 환율 병합 + 달러 환산가 + 가치 지수 (db_revision 기준 캐시)."""
+    from app import _DATA_CACHE_VERSION, get_prepared_sale_data
+
+    version = cache_version or _DATA_CACHE_VERSION
+    sale_df = get_prepared_sale_data(db_revision, version).copy()
+    base = filter_raemian_firstige_34(sale_df)
     if base.empty:
         return base
 
@@ -318,8 +322,10 @@ def render_usd_asset_tab(sale_df: pd.DataFrame, *, db_revision: str = "") -> Non
         st.warning(_EMPTY_USD_DATA_MSG)
         return
 
+    sale_df = sale_df.copy()
+
     try:
-        df = build_raemian_usd_series(db_revision, sale_df)
+        df = build_raemian_usd_series(db_revision).copy()
     except Exception as exc:
         st.error(f"환율·매매 데이터 처리 오류: {exc}")
         return

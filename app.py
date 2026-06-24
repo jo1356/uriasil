@@ -1347,6 +1347,8 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
         st.info("매매 데이터가 없어 갭 분석을 표시할 수 없습니다.")
         return
 
+    sale_df = sale_df.copy()
+
     apt_col = get_apartment_select_column(sale_df)
     apt_options = _gap_analysis_apt_options(sale_df)
     if not apt_options:
@@ -1667,6 +1669,7 @@ def _sort_trade_table_by_latest_contract(view: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_trade_table(view: pd.DataFrame, *, is_rent: bool = False) -> None:
+    view = view.copy()
     title = "📋 거래 내역"
     with st.expander(title, expanded=False):
         if is_rent:
@@ -1761,6 +1764,8 @@ def _render_market_tab(
     data_source: str,
     db_revision: str,
 ) -> None:
+    df = df.copy()
+
     if not selected_series:
         st.warning("사이드바에서 **단지·평형**을 1개 이상 선택해 주세요.")
         return
