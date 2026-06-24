@@ -65,11 +65,42 @@ def _parse_contract_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(s, format="%Y%m%d", errors="coerce")
 
 
+def _attach_contract_dt(df: pd.DataFrame) -> pd.DataFrame:
+    """원본 계약일자(계약일자/계약일자_표시) → contract_dt 파생."""
+    out = df.copy()
+    if "contract_dt" in out.columns:
+        out["contract_dt"] = pd.to_datetime(out["contract_dt"], errors="coerce")
+        return out
+    if "계약일자" in out.columns:
+        out["contract_dt"] = _parse_contract_datetime(out["계약일자"])
+        return out
+    if "계약일자_표시" in out.columns:
+        out["contract_dt"] = pd.to_datetime(out["계약일자_표시"], errors="coerce")
+        return out
+    return out
+
+
+def _has_usable_contract_dates(df: pd.DataFrame) -> bool:
+    """contract_dt 또는 원본 계약일 컬럼으로 유효한 날짜가 있는지."""
+    if df.empty:
+        return False
+    work = _attach_contract_dt(df)
+    if "contract_dt" not in work.columns:
+        return False
+    return work["contract_dt"].notna().any()
+
+
+_EMPTY_USD_DATA_MSG = "해당 조건의 실거래 데이터가 존재하지 않습니다."
+
+
 def _attach_value_indices(df: pd.DataFrame) -> pd.DataFrame:
     """2014년 최초 거래 가격을 원화·달러 지수 100 기준으로 설정."""
-    out = df.copy()
-    y2014 = out[out["contract_dt"].dt.year == INDEX_BASE_YEAR].sort_values("contract_dt")
-    base = y2014.iloc[0] if not y2014.empty else out.sort_values("contract_dt").iloc[0]
+    out = _attach_contract_dt(df)
+    if out.empty or "contract_dt" not in out.columns or out["contract_dt"].dropna().empty:
+        return out.iloc[0:0].copy()
+    out = out.dropna(subset=["contract_dt"]).sort_values("contract_dt")
+    y2014 = out[out["contract_dt"].dt.year == INDEX_BASE_YEAR]
+    base = y2014.iloc[0] if not y2014.empty else out.iloc[0]
 
     krw0 = float(base["거래금액(만원)"])
     usd0 = float(base["달러환산가(USD)"])
@@ -94,10 +125,12 @@ def build_raemian_usd_series(
 
     fx = load_usdkrw_daily(FX_START)
     if fx.empty:
-        return base
+        return base.iloc[0:0].copy()
 
     out = base.copy()
-    out["contract_dt"] = _parse_contract_datetime(out["계약일자"])
+    if "계약일자" not in out.columns and "계약일자_표시" not in out.columns:
+        return out.iloc[0:0].copy()
+    out = _attach_contract_dt(out)
     out = out.dropna(subset=["contract_dt", "거래금액(만원)"])
     out = out.sort_values("contract_dt").reset_index(drop=True)
 
@@ -134,9 +167,12 @@ def _format_usd_delta(usd_delta: float, pct: float) -> str:
 
 def _compute_period_roi(period_df: pd.DataFrame) -> dict:
     """구간 내 최초·최종 거래 기준 절대값 수익률."""
-    if period_df.empty or len(period_df) < 1:
+    work = _attach_contract_dt(period_df)
+    if work.empty or "contract_dt" not in work.columns:
         return {}
-    ordered = period_df.sort_values("contract_dt")
+    ordered = work.dropna(subset=["contract_dt"]).sort_values("contract_dt")
+    if ordered.empty:
+        return {}
     first = ordered.iloc[0]
     last = ordered.iloc[-1]
 
@@ -186,8 +222,18 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
         fig.update_yaxes(title_text="가치 지수 (2014=100)")
         return fig
 
-    x = period_df["contract_dt"]
-    custom = _tooltip_rows(period_df)
+    chart_df = _attach_contract_dt(period_df).dropna(subset=["contract_dt"])
+    if chart_df.empty:
+        fig.update_layout(
+            title=f"{TARGET_APT} {TARGET_PYEONG} — 가치 지수{title_suffix}",
+            height=700,
+        )
+        fig.update_xaxes(title_text="계약일", rangeslider_visible=False)
+        fig.update_yaxes(title_text="가치 지수 (2014=100)")
+        return fig
+
+    x = chart_df["contract_dt"]
+    custom = _tooltip_rows(chart_df)
     abs_hover = (
         "%{customdata[0]}<br>"
         "원화: %{customdata[1]}<br>"
@@ -199,7 +245,7 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
     fig.add_trace(
         go.Scatter(
             x=x,
-            y=period_df["원화지수"],
+            y=chart_df["원화지수"],
             mode="lines+markers",
             name="원화 지수",
             line=dict(color="#2563eb", width=2),
@@ -211,7 +257,7 @@ def build_usd_index_chart(period_df: pd.DataFrame, *, index_base_date: str = "")
     fig.add_trace(
         go.Scatter(
             x=x,
-            y=period_df["달러지수"],
+            y=chart_df["달러지수"],
             mode="lines+markers",
             name="달러 지수",
             line=dict(color="#dc2626", width=2),
@@ -237,8 +283,11 @@ _PERIOD_SLIDER_KEY = "usd_asset_period_range"
 
 
 def _filter_by_period(df: pd.DataFrame, start_d: date, end_d: date) -> pd.DataFrame:
-    mask = (df["contract_dt"].dt.date >= start_d) & (df["contract_dt"].dt.date <= end_d)
-    return df.loc[mask].copy()
+    work = _attach_contract_dt(df)
+    if work.empty or "contract_dt" not in work.columns:
+        return work.iloc[0:0].copy()
+    mask = (work["contract_dt"].dt.date >= start_d) & (work["contract_dt"].dt.date <= end_d)
+    return work.loc[mask].copy()
 
 
 def _render_roi_metrics(roi: dict, trade_count: int) -> None:
@@ -265,22 +314,29 @@ def _render_roi_metrics(roi: dict, trade_count: int) -> None:
 
 def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> None:
     """달러 환산 자산가치 탭 본문."""
+    if sale_df is None or sale_df.empty:
+        st.warning(_EMPTY_USD_DATA_MSG)
+        return
+
     try:
         df = build_raemian_usd_series(sale_df, data_file_fp)
     except Exception as exc:
         st.error(f"환율·매매 데이터 처리 오류: {exc}")
         return
 
-    if df.empty:
-        st.warning(
-            f"{TARGET_APT} {TARGET_PYEONG} 매매 데이터가 없습니다. "
-            "사이드바에서 데이터를 수집해 주세요."
-        )
+    if df.empty or not _has_usable_contract_dates(df):
+        st.warning(_EMPTY_USD_DATA_MSG)
+        return
+
+    df = _attach_contract_dt(df)
+    valid = df.dropna(subset=["contract_dt"])
+    if valid.empty:
+        st.warning(_EMPTY_USD_DATA_MSG)
         return
 
     index_base = str(df["지수기준일"].iloc[0]) if "지수기준일" in df.columns else ""
-    min_d: date = df["contract_dt"].min().date()
-    max_d: date = df["contract_dt"].max().date()
+    min_d: date = valid["contract_dt"].min().date()
+    max_d: date = valid["contract_dt"].max().date()
     default_range = (min_d, max_d)
 
     if _PERIOD_SLIDER_KEY not in st.session_state:
