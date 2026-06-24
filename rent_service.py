@@ -35,6 +35,7 @@ from data_service import (
     filter_by_targets,
     generate_month_range,
     get_data_start_ymd,
+    get_filled_slot_count,
     is_allowed_area_m2,
     normalize_raw_dataframe,
     parse_targets,
@@ -707,13 +708,10 @@ def rent_cache_status() -> dict:
 
     from database import RENTS_TABLE, cache_storage_status
 
-    cached = load_cached_rent_data()
     months = generate_month_range(get_data_start_ymd(), end=datetime.now())
     lawd_codes = _as_list(config.LAWD_CD)
     total_slots = len(months) * len(lawd_codes)
-    from data_service import get_filled_slots
-
-    filled = len(get_filled_slots(cached, "rent"))
+    filled = get_filled_slot_count("rent")
     period = (
         f"{get_data_start_ymd()[:4]}.{get_data_start_ymd()[4:6]} ~ "
         f"{months[-1][:4]}.{months[-1][4:6]}"
@@ -723,7 +721,7 @@ def rent_cache_status() -> dict:
     storage = cache_storage_status(RENTS_TABLE)
     return {
         "exists": storage["exists"],
-        "rows": len(cached),
+        "rows": storage["rows"],
         "filled_slots": filled,
         "total_slots": total_slots,
         "period": period,

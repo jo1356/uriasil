@@ -1124,6 +1124,14 @@ def get_filled_slots(cached: pd.DataFrame, kind: CacheKind) -> set[tuple[str, st
     return from_csv | _manifest_slots_as_pairs(kind)
 
 
+def get_filled_slot_count(kind: CacheKind) -> int:
+    """전체 테이블 로드 없이 manifest + DB DISTINCT 슬롯 수."""
+    from database import RENTS_TABLE, SALES_TABLE, get_distinct_slot_pairs
+
+    table = SALES_TABLE if kind == "sale" else RENTS_TABLE
+    return len(_manifest_slots_as_pairs(kind) | get_distinct_slot_pairs(table))
+
+
 def get_recent_refresh_months(
     n: int = 2,
     *,
@@ -2139,11 +2147,10 @@ def _area_display(row: pd.Series) -> str:
 def cache_status() -> dict:
     from database import SALES_TABLE, cache_storage_status
 
-    cached = load_cached_data()
     months = generate_month_range(get_data_start_ymd())
     lawd_codes = _as_list(config.LAWD_CD)
     total_slots = len(months) * len(lawd_codes)
-    filled = len(get_filled_slots(cached, "sale"))
+    filled = get_filled_slot_count("sale")
     period = (
         f"{get_data_start_ymd()[:4]}.{get_data_start_ymd()[4:6]} ~ "
         f"{months[-1][:4]}.{months[-1][4:6]}"
@@ -2153,7 +2160,7 @@ def cache_status() -> dict:
     storage = cache_storage_status(SALES_TABLE)
     return {
         "exists": storage["exists"],
-        "rows": len(cached),
+        "rows": storage["rows"],
         "filled_slots": filled,
         "total_slots": total_slots,
         "period": period,

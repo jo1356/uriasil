@@ -113,13 +113,13 @@ def _attach_value_indices(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def build_raemian_usd_series(
-    sale_df: pd.DataFrame,
-    _data_file_fp: str = "",
+    _db_revision: str,
+    _sale_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """매매 데이터 + 환율 병합 + 달러 환산가 + 가치 지수."""
-    base = filter_raemian_firstige_34(sale_df)
+    base = filter_raemian_firstige_34(_sale_df)
     if base.empty:
         return base
 
@@ -312,14 +312,14 @@ def _render_roi_metrics(roi: dict, trade_count: int) -> None:
         )
 
 
-def render_usd_asset_tab(sale_df: pd.DataFrame, *, data_file_fp: str = "") -> None:
+def render_usd_asset_tab(sale_df: pd.DataFrame, *, db_revision: str = "") -> None:
     """달러 환산 자산가치 탭 본문."""
     if sale_df is None or sale_df.empty:
         st.warning(_EMPTY_USD_DATA_MSG)
         return
 
     try:
-        df = build_raemian_usd_series(sale_df, data_file_fp)
+        df = build_raemian_usd_series(db_revision, sale_df)
     except Exception as exc:
         st.error(f"환율·매매 데이터 처리 오류: {exc}")
         return

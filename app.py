@@ -23,9 +23,9 @@ from data_service import (
     _as_list,
     cache_status,
     default_chart_selection,
+    filter_sale_transactions,
     get_apartment_select_column,
     get_data_cache_fingerprint,
-    load_cached_data,
     parse_target_pyeong,
     parse_targets,
     prepare_dashboard_data,
@@ -33,14 +33,16 @@ from data_service import (
     validate_service_key,
 )
 from rent_service import (
-    load_cached_rent_data,
+    filter_rent_transactions,
     prepare_rent_dashboard_data,
+    purge_rent_sale_cross_contamination,
     rent_cache_status,
 )
 from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
-_DATA_CACHE_VERSION = "v51_supabase_db"
+_DATA_CACHE_VERSION = "v52_perf_db_cache"
+_DB_CACHE_TTL = 3600
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
@@ -204,29 +206,67 @@ def _sidebar_pyeong_uses_right_column(pyeong: str) -> bool:
     return pyeong == "34평형"
 
 
-@st.cache_data(show_spinner="매매 데이터 불러오는 중...", ttl=300)
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
+def _get_db_revision(_cache_version: str = _DATA_CACHE_VERSION) -> str:
+    """Supabase 테이블 revision — 문자열만 캐시 키로 사용 (엔진/세션 제외)."""
+    return get_data_cache_fingerprint(app_cache_version=_cache_version)
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner="매매 DB 불러오는 중...")
+def _fetch_sale_table_raw(_db_revision: str) -> pd.DataFrame:
+    """apt_sales 전체 조회 — UI rerun마다 재실행되지 않도록 캐시."""
+    from database import SALES_TABLE, read_table
+
+    raw = read_table(SALES_TABLE)
+    if raw.empty:
+        return raw
+    return filter_sale_transactions(raw)
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner="전월세 DB 불러오는 중...")
+def _fetch_rent_table_raw(_db_revision: str) -> pd.DataFrame:
+    """apt_rents 전체 조회 — UI rerun마다 재실행되지 않도록 캐시."""
+    from database import RENTS_TABLE, read_table
+
+    return read_table(RENTS_TABLE)
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
+def _get_sale_cache_status(_db_revision: str) -> dict:
+    return cache_status()
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
+def _get_rent_cache_status(_db_revision: str) -> dict:
+    return rent_cache_status()
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
 def get_prepared_sale_data(
+    _db_revision: str,
     _cache_version: str = _DATA_CACHE_VERSION,
-    _data_file_fp: str = "",
 ) -> pd.DataFrame:
-    raw = load_cached_data()
+    """매매 대시보드용 DataFrame — DB 1회 로드 후 메모리 캐시."""
+    raw = _fetch_sale_table_raw(_db_revision)
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     return add_outlier_flags(prepare_dashboard_data(raw, targets), is_rent=False)
 
 
-@st.cache_data(show_spinner="전월세 데이터 불러오는 중...", ttl=300)
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
 def get_prepared_rent_data(
+    _db_revision: str,
     _cache_version: str = _DATA_CACHE_VERSION,
-    _data_file_fp: str = "",
 ) -> pd.DataFrame:
-    raw = load_cached_rent_data()
+    """전월세 대시보드용 DataFrame — DB 1회 로드 후 메모리 캐시."""
+    raw = _fetch_rent_table_raw(_db_revision)
+    if not raw.empty:
+        raw = purge_rent_sale_cross_contamination(filter_rent_transactions(raw))
     targets = parse_targets(getattr(config, "TARGET_APARTMENTS", []))
     return add_outlier_flags(prepare_rent_dashboard_data(raw, targets), is_rent=True)
 
 
-def _data_file_fingerprint() -> str:
-    """캐시 CSV 변경 시 Streamlit 메모리 캐시 자동 무효화."""
-    return get_data_cache_fingerprint(app_cache_version=_DATA_CACHE_VERSION)
+def _db_revision_key() -> str:
+    return _get_db_revision(_DATA_CACHE_VERSION)
 
 
 def _group_p90(series: pd.Series) -> float:
@@ -367,16 +407,16 @@ def prepare_chart_comparison_data(
     return pd.concat(parts, ignore_index=True).dropna(subset=["거래금액(만원)"])
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
 def get_sorted_chart_options(
+    _db_revision: str,
     _cache_version: str = _DATA_CACHE_VERSION,
-    _data_file_fp: str = "",
     market: str = "sale",
 ) -> list[str]:
     df = (
-        get_prepared_sale_data(_cache_version, _data_file_fp)
+        get_prepared_sale_data(_db_revision)
         if market == "sale"
-        else get_prepared_rent_data(_cache_version, _data_file_fp)
+        else get_prepared_rent_data(_db_revision)
     )
     if df.empty:
         return []
@@ -417,37 +457,52 @@ def prepare_raw_chart_data(
     )
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
 def _prepare_raw_chart_df(
     data_source: str,
-    _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
+    _db_revision: str,
     _cache_version: str = _DATA_CACHE_VERSION,
-    _data_file_fp: str = "",
 ) -> pd.DataFrame:
-    """차트용 실거래 DataFrame 캐시."""
+    """차트용 실거래 DataFrame — 메모리 캐시된 prepared DF에서 필터만."""
     if not selected_labels:
         return pd.DataFrame()
-    return prepare_raw_chart_data(_df, list(selected_labels))
+    df = (
+        get_prepared_sale_data(_db_revision)
+        if data_source == "sale"
+        else get_prepared_rent_data(_db_revision)
+    )
+    df = _chart_df_excluding_outliers(df)
+    return prepare_raw_chart_data(df, list(selected_labels))
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(ttl=_DB_CACHE_TTL, show_spinner=False)
 def _prepare_comparison_chart_df(
     data_source: str,
-    _df: pd.DataFrame,
     selected_labels: tuple[str, ...],
+    _db_revision: str,
     _cache_version: str = _DATA_CACHE_VERSION,
-    _data_file_fp: str = "",
 ) -> pd.DataFrame:
-    """통합 툴팁용 nearest 매핑 DataFrame 캐시."""
+    """통합 툴팁용 nearest 매핑 — prepared DF 메모리 필터."""
     if not selected_labels:
         return pd.DataFrame()
-    return prepare_chart_comparison_data(_df, list(selected_labels))
+    df = (
+        get_prepared_sale_data(_db_revision)
+        if data_source == "sale"
+        else get_prepared_rent_data(_db_revision)
+    )
+    df = _chart_df_excluding_outliers(df)
+    return prepare_chart_comparison_data(df, list(selected_labels))
 
 
 def _clear_data_caches() -> None:
     """수집 완료 후 Streamlit 메모리 캐시 전부 무효화."""
     st.cache_data.clear()
+    _get_db_revision.clear()
+    _fetch_sale_table_raw.clear()
+    _fetch_rent_table_raw.clear()
+    _get_sale_cache_status.clear()
+    _get_rent_cache_status.clear()
     get_prepared_sale_data.clear()
     get_prepared_rent_data.clear()
     get_sorted_chart_options.clear()
@@ -972,29 +1027,26 @@ def _format_chart_label_display(label: str) -> str:
 
 
 def build_chart_cached(
-    df: pd.DataFrame,
     selected_labels: tuple[str, ...],
     y_axis_title: str,
     chart_height: int,
     data_source: str,
     *,
-    data_file_fp: str = "",
+    db_revision: str,
 ) -> go.Figure:
     """실거래 원본은 캐시, Plotly figure·표시 라벨은 매 실행마다 생성."""
     labels = _ordered_chart_labels(list(selected_labels))
     raw_chart = _prepare_raw_chart_df(
         data_source,
-        df,
         tuple(labels),
+        db_revision,
         _DATA_CACHE_VERSION,
-        data_file_fp,
     )
     tooltip_df = _prepare_comparison_chart_df(
         data_source,
-        df,
         tuple(labels),
+        db_revision,
         _DATA_CACHE_VERSION,
-        data_file_fp,
     )
     return build_price_chart(
         raw_chart,
@@ -1707,7 +1759,7 @@ def _render_market_tab(
     chart_key: str,
     chart_height: int,
     data_source: str,
-    data_file_fp: str = "",
+    db_revision: str,
 ) -> None:
     if not selected_series:
         st.warning("사이드바에서 **단지·평형**을 1개 이상 선택해 주세요.")
@@ -1741,14 +1793,12 @@ def _render_market_tab(
         return
 
     y_title = "환산 전세가" if is_rent else "거래금액"
-    chart_df = _chart_df_excluding_outliers(df)
     fig = build_chart_cached(
-        chart_df,
         tuple(selected_series),
         y_title,
         chart_height,
         data_source=data_source,
-        data_file_fp=data_file_fp,
+        db_revision=db_revision,
     )
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
     _render_trade_table(view, is_rent=is_rent)
@@ -1770,11 +1820,11 @@ def main() -> None:
 
     _init_incremental_update_session()
 
-    data_file_fp = _data_file_fingerprint()
-    sale_status = cache_status()
-    rent_status = rent_cache_status()
-    sale_df = get_prepared_sale_data(_DATA_CACHE_VERSION, data_file_fp)
-    rent_df = get_prepared_rent_data(_DATA_CACHE_VERSION, data_file_fp)
+    db_revision = _db_revision_key()
+    sale_status = _get_sale_cache_status(db_revision)
+    rent_status = _get_rent_cache_status(db_revision)
+    sale_df = get_prepared_sale_data(db_revision)
+    rent_df = get_prepared_rent_data(db_revision)
 
     config_pyeong = parse_target_pyeong(getattr(config, "TARGET_PYEONG", None))
     merged_series_options = _merge_series_labels(sale_df, rent_df)
@@ -1822,7 +1872,7 @@ def main() -> None:
                 chart_key="sale_price_chart",
                 chart_height=600,
                 data_source="sale",
-                data_file_fp=data_file_fp,
+                db_revision=db_revision,
             )
 
     with tab_gap:
@@ -1835,7 +1885,7 @@ def main() -> None:
         if not sale_status["exists"] or sale_df.empty:
             st.info("매매 캐시가 없어 달러 환산 분석을 표시할 수 없습니다.")
         else:
-            render_usd_asset_tab(sale_df, data_file_fp=data_file_fp)
+            render_usd_asset_tab(sale_df, db_revision=db_revision)
 
     with tab_rent:
         if not rent_status["exists"] or rent_df.empty:
@@ -1852,7 +1902,7 @@ def main() -> None:
                 chart_key="rent_price_chart",
                 chart_height=700,
                 data_source="rent",
-                data_file_fp=data_file_fp,
+                db_revision=db_revision,
             )
 
     _monitor_background_subprocess()

@@ -159,6 +159,44 @@ def table_exists(table_name: str) -> bool:
         return False
 
 
+def get_table_row_count(table_name: str) -> int:
+    """테이블 행 수 — SELECT * 없이 COUNT만."""
+    if not table_exists(table_name):
+        return 0
+    try:
+        return int(
+            pd.read_sql(
+                f'SELECT COUNT(*) AS cnt FROM "{table_name}"',
+                get_engine(),
+            ).iloc[0]["cnt"]
+        )
+    except Exception:
+        return 0
+
+
+def get_distinct_slot_pairs(table_name: str) -> set[tuple[str, str]]:
+    """(조회지역코드, 조회계약년월) DISTINCT — 전체 테이블 로드 없이 슬롯 집계."""
+    if not table_exists(table_name):
+        return set()
+    try:
+        df = pd.read_sql(
+            f'''
+            SELECT DISTINCT "조회지역코드", "조회계약년월"
+            FROM "{table_name}"
+            WHERE "조회지역코드" IS NOT NULL AND "조회계약년월" IS NOT NULL
+            ''',
+            get_engine(),
+        )
+        if df.empty:
+            return set()
+        return {
+            (str(r["조회지역코드"]), str(r["조회계약년월"]))
+            for _, r in df.iterrows()
+        }
+    except Exception:
+        return set()
+
+
 def read_table(table_name: str) -> pd.DataFrame:
     """테이블 전체 조회 — 없으면 빈 DataFrame."""
     if not table_exists(table_name):
@@ -230,20 +268,9 @@ def get_table_fingerprint(table_name: str) -> str:
 
 
 def cache_storage_status(table_name: str) -> dict[str, Any]:
-    exists = table_exists(table_name) and not read_table(table_name).empty
-    rows = 0
-    if table_exists(table_name):
-        try:
-            rows = int(
-                pd.read_sql(
-                    f'SELECT COUNT(*) AS cnt FROM "{table_name}"',
-                    get_engine(),
-                ).iloc[0]["cnt"]
-            )
-        except Exception:
-            rows = 0
+    rows = get_table_row_count(table_name)
     return {
-        "exists": exists,
+        "exists": rows > 0,
         "rows": rows,
         "path": f"supabase:{table_name}",
     }
