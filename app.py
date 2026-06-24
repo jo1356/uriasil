@@ -10,6 +10,7 @@ import html
 import os
 import subprocess
 import sys
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -453,6 +454,33 @@ def _clear_data_caches() -> None:
     get_sorted_chart_options.clear()
     _prepare_raw_chart_df.clear()
     _prepare_comparison_chart_df.clear()
+    try:
+        from usd_asset_tab import build_raemian_usd_series, load_usdkrw_daily
+
+        build_raemian_usd_series.clear()
+        load_usdkrw_daily.clear()
+    except Exception:
+        pass
+    try:
+        from database import get_engine
+
+        get_engine.cache_clear()
+    except Exception:
+        pass
+
+
+def _show_pending_update_notice() -> None:
+    """수집 완료 후 rerun 직후 사이드바 알림 1회 표시."""
+    pending = st.session_state.pop("_pending_update_notice", None)
+    if not pending:
+        return
+    kind, msg = pending
+    if kind == "error":
+        st.sidebar.error(msg)
+    elif kind == "success":
+        st.sidebar.success(msg)
+    else:
+        st.sidebar.info(msg)
 
 
 def _subprocess_env_with_service_key() -> dict[str, str]:
@@ -571,26 +599,15 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
     st.session_state.update_in_progress = True
     st.session_state.update_progress_percent = 0
     st.session_state.update_status_msg = _UPDATE_PROGRESS_MSG
+    st.session_state.pop("_update_finish_applied", None)
+    st.session_state.pop("_pending_update_notice", None)
 
 
-@st.fragment(run_every=timedelta(seconds=1))
-def _poll_incremental_update_fragment() -> None:
-    """백그라운드 수집 완료 감지 + 실시간 진행률 UI (메인 차트와 독립 폴링)."""
-    from update_status import read_update_status
-
-    _init_incremental_update_session()
-    if not st.session_state.incremental_update_running:
+def _finish_background_update(status: dict) -> None:
+    """백그라운드 수집 종료 — 캐시 강제 파기 후 전체 앱 재실행."""
+    if st.session_state.get("_update_finish_applied"):
         return
-
-    _render_live_update_progress()
-
-    status = read_update_status()
-    pid = st.session_state.get("incremental_update_pid")
-    proc_alive = _is_pid_alive(pid)
-    still_running = (bool(status.get("running")) or proc_alive) and not status.get("done")
-
-    if still_running:
-        return
+    st.session_state._update_finish_applied = True
 
     st.session_state.incremental_update_running = False
     st.session_state.incremental_update_pid = None
@@ -599,21 +616,60 @@ def _poll_incremental_update_fragment() -> None:
     final_msg = str(status.get("message") or "매매·전월세 업데이트 완료")
     st.session_state.update_status_msg = final_msg
 
-    if not status.get("done") and not status.get("error"):
-        return
-
     _clear_data_caches()
+
     err = status.get("error")
     if err:
-        st.sidebar.error(str(err))
+        st.session_state["_pending_update_notice"] = ("error", str(err))
     elif status.get("done"):
-        st.sidebar.success("매매·전월세 업데이트 완료")
+        st.session_state["_pending_update_notice"] = ("success", "매매·전월세 업데이트 완료")
+    else:
+        st.session_state["_pending_update_notice"] = (
+            "info",
+            "수집이 종료되어 최신 데이터를 반영합니다.",
+        )
+
     st.rerun()
 
 
-def _render_sidebar_update_controls() -> None:
-    """데이터 수집 버튼·진행 표시 — @st.fragment 폴링과 분리된 사이드바 UI."""
+def _monitor_background_subprocess() -> None:
+    """
+    main() 최하단 감시 — subprocess 생존 시 주기적 rerun으로 진행률 갱신,
+    종료 감지 즉시 캐시 파기 + 최종 rerun.
+    """
+    from update_status import read_update_status
+
     _init_incremental_update_session()
+    if not st.session_state.get("incremental_update_running"):
+        return
+
+    status = read_update_status()
+    pid = st.session_state.get("incremental_update_pid")
+    proc_alive = _is_pid_alive(pid)
+
+    if proc_alive:
+        time.sleep(1.5)
+        st.rerun()
+
+    if not status.get("done") and not status.get("error"):
+        time.sleep(0.5)
+        status = read_update_status()
+
+    _finish_background_update(status)
+
+
+def _render_update_progress_sidebar() -> None:
+    """사이드바 진행률 표시 (메인 rerun 주기와 동기화)."""
+    _init_incremental_update_session()
+    if not st.session_state.incremental_update_running:
+        return
+    _render_live_update_progress()
+
+
+def _render_sidebar_update_controls() -> None:
+    """데이터 수집 버튼·진행 표시."""
+    _init_incremental_update_session()
+    _show_pending_update_notice()
     update_disabled = bool(st.session_state.incremental_update_running)
 
     if st.button(
@@ -630,7 +686,7 @@ def _render_sidebar_update_controls() -> None:
         except Exception as exc:
             st.error(str(exc))
 
-    _poll_incremental_update_fragment()
+    _render_update_progress_sidebar()
 
     st.caption(
         f"{len(_as_list(config.LAWD_CD))}개 구역 · "
@@ -643,7 +699,7 @@ def _render_sidebar_danger_zone() -> None:
     _init_incremental_update_session()
     update_disabled = bool(st.session_state.incremental_update_running)
 
-    with st.sidebar.expander("⚠️ 시스템 관리 (위험 구역)", expanded=False):
+    with st.sidebar.expander("⚠️ 시스템 관리", expanded=False):
         st.warning(
             "주의: 기존 캐시를 모두 지우고 전체 데이터를 처음부터 다시 수집합니다. "
             "서버 부하가 발생하고 시간이 오래 걸릴 수 있습니다."
@@ -1744,6 +1800,7 @@ def main() -> None:
             "👈 사이드바 **「데이터 업데이트」**로 2014년~현재 매매·전월세 데이터를 수집하세요.\n\n"
             "첫 수집은 시간이 걸릴 수 있으며, 이후에는 캐시를 사용합니다."
         )
+        _monitor_background_subprocess()
         return
 
     tab_sale, tab_gap, tab_usd, tab_rent = st.tabs(
@@ -1798,6 +1855,8 @@ def main() -> None:
                 data_source="rent",
                 data_file_fp=data_file_fp,
             )
+
+    _monitor_background_subprocess()
 
 
 if __name__ == "__main__":
