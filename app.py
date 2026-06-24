@@ -637,20 +637,30 @@ def _render_sidebar_update_controls() -> None:
         "누락 월 보충 + 최근 2개월 자동 재수집"
     )
 
-    st.divider()
-    st.caption("⚠️ 전체 재수집 (오래 걸림)")
-    if st.button(
-        "♻️ 캐시 초기화 후 전체 재수집",
-        use_container_width=True,
-        disabled=update_disabled,
-    ):
-        try:
-            validate_service_key()
-            _start_subprocess_fetch("--rebuild")
-            st.toast("데이터 업데이트를 백그라운드에서 진행합니다.")
-            st.rerun()
-        except Exception as exc:
-            st.error(str(exc))
+
+def _render_sidebar_danger_zone() -> None:
+    """사이드바 하단 — 전체 재수집 등 위험 작업 (expander로 격리)."""
+    _init_incremental_update_session()
+    update_disabled = bool(st.session_state.incremental_update_running)
+
+    with st.sidebar.expander("⚠️ 시스템 관리 (위험 구역)", expanded=False):
+        st.warning(
+            "주의: 기존 캐시를 모두 지우고 전체 데이터를 처음부터 다시 수집합니다. "
+            "서버 부하가 발생하고 시간이 오래 걸릴 수 있습니다."
+        )
+        if st.button(
+            "♻️ 캐시 초기화 후 전체 재수집",
+            use_container_width=True,
+            disabled=update_disabled,
+            key="sidebar_full_rebuild_btn",
+        ):
+            try:
+                validate_service_key()
+                _start_subprocess_fetch("--rebuild")
+                st.toast("데이터 업데이트를 백그라운드에서 진행합니다.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
 
 
 def _clear_series_selection_session() -> None:
@@ -1508,6 +1518,9 @@ def _render_sidebar(
             )
         else:
             st.warning("전월세 캐시 없음")
+
+        st.divider()
+        _render_sidebar_danger_zone()
 
     return selected_series
 
