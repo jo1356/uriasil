@@ -26,14 +26,22 @@ def write_update_status(
     running: bool = True,
     done: bool = False,
     error: str | None = None,
+    current_step: int | None = None,
+    total_steps: int | None = None,
 ) -> None:
-    payload = {
-        "ratio": float(max(0.0, min(1.0, ratio))),
+    ratio_f = float(max(0.0, min(1.0, ratio)))
+    payload: dict[str, Any] = {
+        "ratio": ratio_f,
+        "percent": int(round(ratio_f * 100)),
         "message": str(message),
         "running": bool(running and not done),
         "done": bool(done),
         "error": error,
     }
+    if current_step is not None:
+        payload["current_step"] = int(current_step)
+    if total_steps is not None:
+        payload["total_steps"] = int(total_steps)
     UPDATE_STATUS_FILE.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",

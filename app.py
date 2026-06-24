@@ -507,9 +507,46 @@ def _init_incremental_update_session() -> None:
         st.session_state.incremental_update_running = False
     if "incremental_update_pid" not in st.session_state:
         st.session_state.incremental_update_pid = None
+    if "update_in_progress" not in st.session_state:
+        st.session_state.update_in_progress = False
+    if "update_progress_percent" not in st.session_state:
+        st.session_state.update_progress_percent = 0
+    if "update_status_msg" not in st.session_state:
+        st.session_state.update_status_msg = ""
 
 
 _UPDATE_PROGRESS_MSG = "국토부 최신 데이터를 수집 중입니다. (기존 데이터 조회 가능)"
+
+
+def _sync_update_progress_from_file() -> None:
+    """백그라운드 subprocess → JSON 파일 → session_state 동기화."""
+    from update_status import read_update_status
+
+    status = read_update_status()
+    if not status:
+        return
+    pct = status.get("percent")
+    if pct is None:
+        pct = int(round(float(status.get("ratio", 0) or 0) * 100))
+    st.session_state.update_progress_percent = max(0, min(100, int(pct)))
+    msg = str(status.get("message") or "").strip()
+    if msg:
+        st.session_state.update_status_msg = msg
+
+
+def _render_live_update_progress() -> None:
+    """수집 중 실시간 Progress Bar + 상세 상태 문구."""
+    if not (
+        st.session_state.get("update_in_progress")
+        or st.session_state.get("incremental_update_running")
+    ):
+        return
+    _sync_update_progress_from_file()
+    pct = float(st.session_state.get("update_progress_percent", 0)) / 100.0
+    st.progress(min(max(pct, 0.0), 1.0))
+    status_msg = st.session_state.get("update_status_msg") or _UPDATE_PROGRESS_MSG
+    st.caption(status_msg)
+    st.caption("메인 화면은 기존 캐시 데이터를 계속 표시합니다.")
 
 
 def _start_subprocess_fetch(*extra_args: str) -> None:
@@ -531,20 +568,21 @@ def _start_subprocess_fetch(*extra_args: str) -> None:
     log_file.close()
     st.session_state.incremental_update_pid = proc.pid
     st.session_state.incremental_update_running = True
+    st.session_state.update_in_progress = True
+    st.session_state.update_progress_percent = 0
+    st.session_state.update_status_msg = _UPDATE_PROGRESS_MSG
 
 
-@st.fragment(run_every=timedelta(seconds=2))
+@st.fragment(run_every=timedelta(seconds=1))
 def _poll_incremental_update_fragment() -> None:
-    """백그라운드 수집 완료 감지 — 메인 차트 렌더링과 독립적으로 폴링."""
+    """백그라운드 수집 완료 감지 + 실시간 진행률 UI (메인 차트와 독립 폴링)."""
     from update_status import read_update_status
 
     _init_incremental_update_session()
     if not st.session_state.incremental_update_running:
         return
 
-    if st.session_state.incremental_update_running:
-        st.status(_UPDATE_PROGRESS_MSG, state="running", expanded=False)
-        st.caption("메인 화면은 기존 캐시 데이터를 계속 표시합니다.")
+    _render_live_update_progress()
 
     status = read_update_status()
     pid = st.session_state.get("incremental_update_pid")
@@ -556,6 +594,10 @@ def _poll_incremental_update_fragment() -> None:
 
     st.session_state.incremental_update_running = False
     st.session_state.incremental_update_pid = None
+    st.session_state.update_in_progress = False
+    st.session_state.update_progress_percent = 100
+    final_msg = str(status.get("message") or "매매·전월세 업데이트 완료")
+    st.session_state.update_status_msg = final_msg
 
     if not status.get("done") and not status.get("error"):
         return

@@ -1871,7 +1871,11 @@ def update_cache(
 
     for idx, (lawd_cd, deal_ymd) in enumerate(tasks, start=1):
         region = _region_label(lawd_cd, lawd_codes.index(lawd_cd))
-        msg = f"{region} {deal_ymd[:4]}.{deal_ymd[4:]}월 수집 중..."
+        year, month = deal_ymd[:4], deal_ymd[4:6]
+        msg = (
+            f"🔄 {region} {year}년 {int(month)}월 매매 데이터 수집 중... "
+            f"({idx}/{total_tasks})"
+        )
         if progress:
             progress(idx / max(total_tasks, 1), msg)
 

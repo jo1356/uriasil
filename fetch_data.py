@@ -94,6 +94,21 @@ def main() -> None:
     def progress(ratio: float, msg: str) -> None:
         line = f"  [{ratio * 100:5.1f}%] {msg}"
         print(line, flush=True)
+        if "(" in msg and "/" in msg and msg.rstrip().endswith(")"):
+            try:
+                tail = msg.rsplit("(", 1)[-1].rstrip(")")
+                cur_s, tot_s = tail.split("/", 1)
+                write_update_status(
+                    ratio,
+                    msg,
+                    running=True,
+                    done=False,
+                    current_step=int(cur_s),
+                    total_steps=int(tot_s),
+                )
+                return
+            except (ValueError, TypeError):
+                pass
         write_update_status(ratio, msg, running=True, done=False)
 
     reset_update_status("최근 2개월 누락 데이터를 확인하고 수집 중입니다...")
