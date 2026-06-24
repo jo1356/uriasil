@@ -694,7 +694,7 @@ def _render_sidebar_update_controls() -> None:
 
 
 def _render_sidebar_danger_zone() -> None:
-    """사이드바 하단 — 전체 재수집 등 위험 작업 (expander로 격리)."""
+    """사이드바 하단 — 시스템 관리 expander (전체 재수집)."""
     _init_incremental_update_session()
     update_disabled = bool(st.session_state.incremental_update_running)
 
