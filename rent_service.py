@@ -288,7 +288,7 @@ def merge_rent_crawl_into_cache(cached: pd.DataFrame, new_frames: list[pd.DataFr
     """신규 API 수집분을 기존 캐시에 병합·중복 제거."""
     if not new_frames:
         return cached
-    new_df = enforce_strict_pyeong_on_rent_dataframe(pd.concat(new_frames, ignore_index=True))
+    new_df = normalize_rent_dataframe(pd.concat(new_frames, ignore_index=True))
     if new_df.empty:
         return cached
     merged = pd.concat([cached, new_df], ignore_index=True) if not cached.empty else new_df
@@ -656,7 +656,7 @@ def update_rent_cache(
         _flush_rent_frames(reason="최종 병합")
 
     if not cached.empty:
-        cached = enforce_strict_pyeong_on_rent_dataframe(cached)
+        #cached = enforce_strict_pyeong_on_rent_dataframe(cached)#
         cached = dedupe_rent_cache_rows(cached)
         save_cached_rent_data(cached)
 
