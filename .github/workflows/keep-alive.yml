@@ -1,0 +1,61 @@
+name: Keep Streamlit App Awake
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  wake-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Visit app and wake it if sleeping
+        run: |
+          cat <<'EOF' > wake.js
+          const { chromium } = require('playwright');
+          const APP_URL = 'https://j26budrqowyhtnqnpbjf59.streamlit.app/';
+
+          async function run() {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            console.log('Visiting ' + APP_URL);
+            await page.goto(APP_URL, { waitUntil: 'load', timeout: 60000 });
+            await page.waitForTimeout(5000);
+
+            let btn = page.getByRole('button', { name: /get this app back up/i });
+            let count = await btn.count();
+
+            if (count === 0) {
+              btn = page.locator('text=/get this app back up/i');
+              count = await btn.count();
+            }
+
+            if (count > 0) {
+              console.log('App is asleep. Clicking wake button.');
+              await btn.first().click({ timeout: 10000 });
+              await page.waitForTimeout(15000);
+              console.log('Wake button clicked.');
+            } else {
+              console.log('App already awake.');
+            }
+
+            await browser.close();
+          }
+
+          run().catch(function (err) {
+            console.error('Error:', err);
+            process.exit(1);
+          });
+          EOF
+          node wake.js
