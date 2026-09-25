@@ -291,6 +291,8 @@ def is_area_in_collection_whitelist(
         return assign_sinbanpo2_pyeong_group(m2) is not None
     if is_dh_bangbae_apartment(dong_s, apt_s):
         return assign_dh_bangbae_pyeong_group(m2) is not None
+    if is_leadersone_apartment(dong_s, apt_s):
+        return assign_leadersone_pyeong_group(m2) is not None
 
     for rule in getattr(config, "COLLECTION_AREA_WHITELIST", []):
         if rule.get("kind") != "standard":
@@ -612,6 +614,40 @@ def assign_sinhyundai_pyeong_group(area_m2: float) -> str | None:
     return None
 
 
+def is_leadersone_apartment(dong: str, apt: str) -> bool:
+    """서초구 서초동 래미안 리더스원 — API 명칭 '래미안 리더스원'."""
+    lo_dong = str(getattr(config, "LEADERSONE_DONG", "서초동"))
+    if lo_dong not in str(dong):
+        return False
+    lo_name = str(getattr(config, "LEADERSONE_APT_NAME", "리더스원"))
+    return lo_name in re.sub(r"\s+", "", _safe_str(apt))
+
+
+def get_leadersone_area_rules() -> list[tuple[str, float, float, str]]:
+    raw = getattr(
+        config,
+        "LEADERSONE_AREA_RULES",
+        [("24평형", 57.0, 63.0, "24평"), ("24평형", 74.0, 76.0, "29평"), ("34평형", 82.0, 87.0, "34평")],
+    )
+    return [(str(label), float(lo), float(hi), str(disp)) for label, lo, hi, disp in raw]
+
+
+def _match_leadersone_rule(area_m2: float) -> tuple[str, str] | None:
+    """리더스원: 57~63㎡→24평형(24평), 74㎡대→24평형(29평), 82~87㎡→34평형(34평)."""
+    m2 = _parse_area_m2(area_m2)
+    if m2 is None:
+        return None
+    for label, lo, hi, disp in get_leadersone_area_rules():
+        if lo <= m2 < hi:
+            return label, disp
+    return None
+
+
+def assign_leadersone_pyeong_group(area_m2: float) -> str | None:
+    rule = _match_leadersone_rule(area_m2)
+    return rule[0] if rule else None
+
+
 def area_m2_to_pyeong_string(
     area_m2: float,
     *,
@@ -653,6 +689,9 @@ def area_m2_to_pyeong_string(
     if is_dh_bangbae_apartment(dong_s, apt_s):
         group = assign_dh_bangbae_pyeong_group(m2)
         return display_pyeong_for_apartment(display_apt, group) if group else None
+    if is_leadersone_apartment(dong_s, apt_s):
+        rule = _match_leadersone_rule(m2)
+        return rule[1] if rule else None
 
     if 57.0 <= m2 < 63.0:
         return "24평"
@@ -663,6 +702,19 @@ def area_m2_to_pyeong_string(
 
 def pyeong_string_to_group(display_pyeong: str) -> str | None:
     return PYEONG_STRING_TO_GROUP.get(str(display_pyeong or "").strip())
+
+
+def _group_for_display_pyeong(
+    display_pyeong: str,
+    area_m2: float,
+    *,
+    dong: str = "",
+    apt: str = "",
+) -> str | None:
+    """UI 평형 문자열 → 평형그룹. 리더스원 29평은 삼부 29평(34평형)과 달리 24평형."""
+    if is_leadersone_apartment(dong, apt):
+        return assign_leadersone_pyeong_group(area_m2)
+    return pyeong_string_to_group(display_pyeong)
 
 
 def assign_pyeong_group_from_m2(
@@ -688,6 +740,8 @@ def assign_pyeong_group_from_m2(
         return assign_gaepo_woosung_pyeong_group(area_m2)
     if is_sinhyundai_apartment(dong, apt):
         return assign_sinhyundai_pyeong_group(area_m2)
+    if is_leadersone_apartment(dong, apt):
+        return assign_leadersone_pyeong_group(area_m2)
     m2 = _parse_area_m2(area_m2)
     if m2 is None:
         return None
@@ -715,7 +769,7 @@ def assign_pyeong_group_for_cache(
         display = area_m2_to_pyeong_string(m2, dong=dong_s, apt=apt_s)
         if display is None:
             return None
-        group = pyeong_string_to_group(display)
+        group = _group_for_display_pyeong(display, m2, dong=dong_s, apt=apt_s)
         if group is None:
             return None
         if is_allowed_area_m2(m2, group, dong=dong_s, apt=apt_s):
@@ -767,6 +821,8 @@ def is_allowed_area_m2(
             if label == group:
                 return lo <= m2 <= hi
         return False
+    if is_leadersone_apartment(dong, apt):
+        return assign_leadersone_pyeong_group(m2) == group
     for label, lo, hi in AREA_M2_STRICT_RULES:
         if label == group:
             return lo <= m2 < hi
@@ -834,12 +890,10 @@ def format_chart_label(apt_name: str, pyeong_group: str) -> str:
 def _safe_assign_pyeong_from_m2_row(row: pd.Series) -> str | None:
     try:
         apt = resolve_apt_for_pyeong_rules(row)
-        display = area_m2_to_pyeong_string(
-            _parse_area_m2(row.get("전용면적(㎡)")),
-            dong=_safe_str(row.get("법정동", "")),
-            apt=apt,
-        )
-        return pyeong_string_to_group(display) if display else None
+        dong = _safe_str(row.get("법정동", ""))
+        m2 = _parse_area_m2(row.get("전용면적(㎡)"))
+        display = area_m2_to_pyeong_string(m2, dong=dong, apt=apt)
+        return _group_for_display_pyeong(display, m2, dong=dong, apt=apt) if display else None
     except Exception as exc:
         _log_row_parse_error("add_pyeong", exc)
         return None
