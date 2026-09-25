@@ -748,12 +748,61 @@ def _render_sidebar_update_controls() -> None:
     )
 
 
+def _render_backfill_controls(update_disabled: bool) -> None:
+    """선택한 구 × 시작월~현재만 재수집 — 기존 캐시는 유지하고 해당 슬롯만 덮어쓰기."""
+    lawd_codes = _as_list(config.LAWD_CD)
+    region_names = list(getattr(config, "REGION_NAME", []))
+    region_label = {
+        cd: (region_names[i] if i < len(region_names) else cd)
+        for i, cd in enumerate(lawd_codes)
+    }
+    st.markdown("**🎯 부분 재수집**")
+    st.caption(
+        "선택한 구의 시작월~현재 데이터만 다시 받아 덮어씁니다. "
+        "나머지 데이터는 그대로 유지됩니다."
+    )
+    selected = st.multiselect(
+        "지역(구)",
+        options=lawd_codes,
+        format_func=lambda cd: region_label.get(cd, cd),
+        key="backfill_lawd_select",
+    )
+    now = pd.Timestamp.now()
+    start_year = int(str(getattr(config, "DATA_START_YMD", "201401"))[:4])
+    years = list(range(start_year, now.year + 1))
+    col_y, col_m = st.columns(2)
+    with col_y:
+        year = st.selectbox("시작 연도", years, index=len(years) - 1, key="backfill_year")
+    with col_m:
+        month = st.selectbox("시작 월", list(range(1, 13)), index=0, key="backfill_month")
+    start_ymd = f"{year}{month:02d}"
+    months = max((now.year - year) * 12 + (now.month - month) + 1, 0)
+    st.caption(f"예상 API 호출: 약 {len(selected) * months * 2:,}회 (매매+전월세)")
+    if st.button(
+        "🎯 선택 범위만 재수집",
+        use_container_width=True,
+        disabled=update_disabled or not selected or months == 0,
+        key="sidebar_backfill_btn",
+    ):
+        try:
+            validate_service_key()
+            _start_subprocess_fetch(
+                "--backfill-lawd", *selected, "--backfill-from", start_ymd
+            )
+            st.toast("부분 재수집을 백그라운드에서 진행합니다.")
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
+
+
 def _render_sidebar_danger_zone() -> None:
     """사이드바 하단 — 시스템 관리 expander (전체 재수집)."""
     _init_incremental_update_session()
     update_disabled = bool(st.session_state.incremental_update_running)
 
     with st.sidebar.expander("⚠️ 시스템 관리", expanded=False):
+        _render_backfill_controls(update_disabled)
+        st.divider()
         st.warning(
             "주의: 기존 캐시를 모두 지우고 전체 데이터를 처음부터 다시 수집합니다. "
             "서버 부하가 발생하고 시간이 오래 걸릴 수 있습니다."
