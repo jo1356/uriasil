@@ -511,6 +511,24 @@ def _prepare_comparison_chart_df(
     return prepare_chart_comparison_data(df, list(selected_labels))
 
 
+@st.cache_resource
+def _applied_update_marker() -> dict:
+    """서버 프로세스 전역 — 캐시에 반영한 마지막 수집 완료 시각."""
+    return {"finished_at": None}
+
+
+def _refresh_caches_if_update_finished() -> None:
+    """수집이 (누가 보고 있지 않을 때) 끝났어도 다음 접속 시 캐시를 비워 최신 데이터 표시."""
+    from update_status import read_update_status
+
+    finished_at = read_update_status().get("finished_at")
+    marker = _applied_update_marker()
+    if finished_at is None or marker["finished_at"] == finished_at:
+        return
+    marker["finished_at"] = finished_at
+    _clear_data_caches()
+
+
 def _clear_data_caches() -> None:
     """수집 완료 후 Streamlit 메모리 캐시 전부 무효화."""
     st.cache_data.clear()
@@ -1948,6 +1966,7 @@ def main() -> None:
 
     st.markdown('<p class="main-header">🏢 아파트 실거래가 대시보드</p>', unsafe_allow_html=True)
 
+    _refresh_caches_if_update_finished()
     _reset_ui_session_if_data_version_changed()
     _reset_ui_session_if_selection_policy_changed()
 

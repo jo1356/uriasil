@@ -78,3 +78,7 @@ def finish_update_status(*, error: str | None = None) -> None:
         write_update_status(1.0, f"오류: {error}", running=False, done=True, error=error)
     else:
         write_update_status(1.0, f"{mode} 완료", running=False, done=True)
+    # 완료 시각 — 수집 종료 시 열려 있던 화면이 없어도 다음 접속에서 캐시 갱신 판단용
+    data = read_update_status()
+    data["finished_at"] = time.time()
+    UPDATE_STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
