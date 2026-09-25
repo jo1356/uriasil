@@ -970,10 +970,6 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         ].copy()
 
     display = out["타겟명"] if "타겟명" in out.columns else out["아파트"]
-    out["차트라벨"] = [
-        format_chart_label(str(n).strip(), str(p))
-        for n, p in zip(display, out["평형그룹"])
-    ]
     # 면적 기반 평형 문자열 우선 (127㎡→44평, 107㎡→34평)
     out["평형"] = out.apply(
         lambda r: area_m2_to_pyeong_string(
@@ -984,12 +980,51 @@ def finalize_pyeong_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     out = out[out["평형"].isin(ALLOWED_DISPLAY_PYEONG)].copy()
+    display = out["타겟명"] if "타겟명" in out.columns else out["아파트"]
+    out["시리즈평형"] = [
+        series_pyeong_for_row(str(n).strip(), str(g), str(p))
+        for n, g, p in zip(display, out["평형그룹"], out["평형"])
+    ]
+    out["차트라벨"] = [
+        format_chart_label(str(n).strip(), str(sp))
+        for n, sp in zip(display, out["시리즈평형"])
+    ]
 
-    # 24평형·34평형 라벨만 허용 (32평형 등 문자열 완전 차단)
+    # 24평형·34평형 (+ SEPARATE_SERIES_PYEONG 분리 평형) 라벨만 허용
+    allowed = "|".join(re.escape(p) for p in all_series_pyeong_labels())
     out = out[
-        out["차트라벨"].str.fullmatch(r".+ \((24평형|34평형)\)", na=False)
+        out["차트라벨"].str.fullmatch(rf".+ \(({allowed})\)", na=False)
     ].copy()
     return out
+
+
+def separate_series_pyeong_map() -> dict[str, dict[str, str]]:
+    """단지 표시명 → {분리 UI 평형: 일괄 선택용 내부 평형그룹}."""
+    raw = getattr(config, "SEPARATE_SERIES_PYEONG", {}) or {}
+    return {str(apt): {str(p): str(g) for p, g in m.items()} for apt, m in raw.items()}
+
+
+def series_pyeong_for_row(apt_name: str, pyeong_group: str, display_pyeong: str) -> str:
+    """차트 시리즈 평형 — 분리 대상(예: 리더스원 29평)이면 UI 평형, 아니면 평형그룹."""
+    if display_pyeong in separate_series_pyeong_map().get(apt_name, {}):
+        return display_pyeong
+    return pyeong_group
+
+
+def all_series_pyeong_labels() -> list[str]:
+    extras = [p for m in separate_series_pyeong_map().values() for p in m]
+    return ALLOWED_PYEONG_GROUPS + [p for p in dict.fromkeys(extras) if p not in ALLOWED_PYEONG_GROUPS]
+
+
+def series_pyeong_rank(pyeong: str) -> float:
+    """24평형(0) → 분리 평형(소속 그룹 + 0.5) → 34평형(1)."""
+    base = {g: float(i) for i, g in enumerate(ALLOWED_PYEONG_GROUPS)}
+    if pyeong in base:
+        return base[pyeong]
+    for m in separate_series_pyeong_map().values():
+        if pyeong in m:
+            return base.get(m[pyeong], 998.0) + 0.5
+    return 999.0
 
 
 def enrich_chart_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -1570,6 +1605,7 @@ def classify_row_at_ingest(row: dict[str, str]) -> dict[str, str] | None:
 _DERIVED_DASHBOARD_COLUMNS = (
     "평형그룹",
     "평형",
+    "시리즈평형",
     "차트라벨",
     "전용평수",
     "전용면적(평)",
@@ -2158,16 +2194,14 @@ def prepare_dashboard_data(
 def sort_chart_labels(labels: list[str], targets: list[TargetDict]) -> list[str]:
     """DASHBOARD_ALLOWED_COMPLEX_LABELS 순 → 평형 순으로 범례/선택 목록 정렬."""
     order = getattr(config, "DASHBOARD_ALLOWED_COMPLEX_LABELS", [])
-    pyeong_rank = {name: i for i, name in enumerate(all_pyeong_labels())}
-
-    def sort_key(label: str) -> tuple[int, int, str]:
+    def sort_key(label: str) -> tuple[int, float, str]:
         apt_part = label.rsplit(" (", 1)[0] if " (" in label else label
         pyeong_part = label.rsplit(" (", 1)[-1].rstrip(")") if " (" in label else ""
         try:
             apt_rank = order.index(apt_part)
         except ValueError:
             apt_rank = len(order)
-        return (apt_rank, pyeong_rank.get(pyeong_part, 999), label)
+        return (apt_rank, series_pyeong_rank(pyeong_part), label)
 
     return sorted(labels, key=sort_key)
 
