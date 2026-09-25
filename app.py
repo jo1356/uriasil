@@ -38,10 +38,11 @@ from rent_service import (
     purge_rent_sale_cross_contamination,
     rent_cache_status,
 )
+from data_service import separate_series_pyeong_map, series_pyeong_rank
 from usd_asset_tab import render_usd_asset_tab
 
 _PROJECT_DIR = Path(__file__).resolve().parent
-_DATA_CACHE_VERSION = "v52_perf_db_cache"
+_DATA_CACHE_VERSION = "v53_separate_series_pyeong"
 _DB_CACHE_TTL = 3600
 _UX_SELECTION_VERSION = "default_24pyeong_v1"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
@@ -123,6 +124,21 @@ _SIDEBAR_APT_ALIASES: dict[str, str] = {
     "디에이치": "디에이치 방배",
 }
 _PYEONG_PRIORITY = {"24평형": 0, "34평형": 1}
+# 분리 시리즈 평형(예: 리더스원 29평) — 소속 그룹 바로 뒤 정렬
+for _sep in separate_series_pyeong_map().values():
+    for _p in _sep:
+        _PYEONG_PRIORITY.setdefault(_p, series_pyeong_rank(_p))
+
+
+def _series_internal_group(apt: str, pyeong: str) -> str:
+    """차트라벨 평형 → 일괄 선택용 내부 평형그룹 (리더스원 29평 → 24평형)."""
+    sep = separate_series_pyeong_map().get(_canonical_sidebar_apt(apt), {})
+    return sep.get(pyeong, pyeong)
+
+
+def _series_pyeong_col(df: pd.DataFrame) -> str:
+    """분리 시리즈가 반영된 평형 컬럼 (없으면 평형그룹)."""
+    return "시리즈평형" if "시리즈평형" in df.columns else "평형그룹"
 _SIDEBAR_UI_VERSION = "인라인 HTML v3"
 
 _PAGE_CSS = """
@@ -317,7 +333,7 @@ def add_outlier_flags(df: pd.DataFrame, *, is_rent: bool) -> pd.DataFrame:
         {
             "_outlier_year": contract_year,
             "_outlier_apt": out[apt_col].astype(str),
-            "_outlier_pyeong": out["평형그룹"].astype(str),
+            "_outlier_pyeong": out[_series_pyeong_col(out)].astype(str),
             "_outlier_price": price,
         },
         index=out.index,
@@ -851,7 +867,7 @@ def _labels_for_pyeong_groups(all_series: list[str], groups: list[str]) -> set[s
     return {
         lb
         for lb in all_series
-        if _extract_label_parts(lb)[1] in group_set
+        if _series_internal_group(*_extract_label_parts(lb)) in group_set
     }
 
 
@@ -905,7 +921,7 @@ def _labels_for_24_pyeong_master(all_series: list[str]) -> set[str]:
     picked: set[str] = set()
     for lb in all_series:
         apt, internal = _extract_label_parts(lb)
-        if internal == "24평형":
+        if _series_internal_group(apt, internal) == "24평형":
             picked.add(lb)
             continue
         if _is_gaepo_woosung_apt(apt) and _format_pyeong_for_apt(apt, internal) == "31평":
@@ -1165,7 +1181,7 @@ def _gap_pyeong_options_for_apt(
     pyeongs: list[str] = []
     if not sale_df.empty and "평형그룹" in sale_df.columns:
         pyeongs = (
-            sale_df.loc[_mask_gap_apt_rows(sale_df, apt_col, apt_name), "평형그룹"]
+            sale_df.loc[_mask_gap_apt_rows(sale_df, apt_col, apt_name), _series_pyeong_col(sale_df)]
             .dropna()
             .astype(str)
             .unique()
@@ -1252,6 +1268,7 @@ def _default_dashboard_series_labels() -> list[str]:
             pyeongs = ["34평형"]
         else:
             pyeongs = ["24평형", "34평형"]
+        pyeongs += [p for p in separate_series_pyeong_map().get(apt, {}) if p not in pyeongs]
         for pg in pyeongs:
             labels.append(f"{apt} ({pg})")
     return labels
@@ -1360,7 +1377,7 @@ def _render_sidebar_series_selector(
                 labels,
                 key=lambda lb: _PYEONG_PRIORITY.get(_extract_label_parts(lb)[1], 999),
             )
-            for label in sorted_labels[:2]:
+            for label in sorted_labels:
                 _, pyeong = _extract_label_parts(label)
                 display_pyeong = _format_pyeong_for_apt(apt, pyeong)
                 cb_key = _series_checkbox_key(key_prefix, label)
@@ -1450,10 +1467,10 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     apt_mask_base = _mask_gap_apt_rows(sale_df, apt_col, base_apt)
     apt_mask_compare = _mask_gap_apt_rows(sale_df, apt_col, compare_apt)
     base_df = sale_df[
-        apt_mask_base & (sale_df["평형그룹"] == base_pyeong)
+        apt_mask_base & (sale_df[_series_pyeong_col(sale_df)] == base_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
     compare_df = sale_df[
-        apt_mask_compare & (sale_df["평형그룹"] == compare_pyeong)
+        apt_mask_compare & (sale_df[_series_pyeong_col(sale_df)] == compare_pyeong)
     ][["계약일자_표시", "계약일자", "거래금액(만원)"]].copy()
 
     if base_df.empty or compare_df.empty:
@@ -1594,9 +1611,9 @@ def _render_gap_analysis_tab(sale_df: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True, key=f"sale_gap_chart_{mode_key}")
 
     # 차트 아래: 기준/비교 거래 내역 좌우 분할
-    base_table_df = sale_df[apt_mask_base & (sale_df["평형그룹"] == base_pyeong)].copy()
+    base_table_df = sale_df[apt_mask_base & (sale_df[_series_pyeong_col(sale_df)] == base_pyeong)].copy()
     compare_table_df = sale_df[
-        apt_mask_compare & (sale_df["평형그룹"] == compare_pyeong)
+        apt_mask_compare & (sale_df[_series_pyeong_col(sale_df)] == compare_pyeong)
     ].copy()
 
     table_cols = [
