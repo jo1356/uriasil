@@ -51,6 +51,13 @@ def _print_region_targets() -> None:
         print(f"    - {label} ({code})")
 
 
+def _region_names(lawd_codes: list[str]) -> str:
+    codes = config.LAWD_CD if isinstance(config.LAWD_CD, list) else [config.LAWD_CD]
+    names = getattr(config, "REGION_NAME", [])
+    label = {cd: (names[i] if i < len(names) else cd) for i, cd in enumerate(codes)}
+    return ", ".join(label.get(cd, cd) for cd in lawd_codes)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="국토부 아파트 실거래·전월세 수집")
     parser.add_argument(
@@ -129,7 +136,13 @@ def main() -> None:
                 pass
         write_update_status(ratio, msg, running=True, done=False)
 
-    reset_update_status("최근 2개월 누락 데이터를 확인하고 수집 중입니다...")
+    if args.backfill_lawd:
+        mode = f"부분 재수집 ({_region_names(args.backfill_lawd)} · {args.backfill_from[:4]}.{args.backfill_from[4:]}~)"
+    elif args.rebuild:
+        mode = "전체 재수집"
+    else:
+        mode = "최근 2개월 업데이트"
+    reset_update_status(f"{mode} 준비 중입니다...", mode=mode)
 
     try:
         if args.rent_only:

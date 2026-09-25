@@ -593,11 +593,26 @@ def _is_pid_alive(pid: int | None) -> bool:
             return False
         finally:
             ctypes.windll.kernel32.CloseHandle(handle)
+    # 종료된 자식 프로세스는 회수(reap)하지 않으면 좀비로 남아 os.kill(pid, 0)이 계속 성공함
     try:
-        os.kill(pid, 0)
-        return True
+        reaped_pid, _ = os.waitpid(pid, os.WNOHANG)
+        if reaped_pid == pid:
+            return False
+    except ChildProcessError:
+        pass
     except OSError:
         return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            if fh.read().rsplit(")", 1)[-1].split()[0] == "Z":
+                return False
+    except OSError:
+        pass
+    return True
 
 
 def _init_incremental_update_session() -> None:
@@ -611,6 +626,23 @@ def _init_incremental_update_session() -> None:
         st.session_state.update_progress_percent = 0
     if "update_status_msg" not in st.session_state:
         st.session_state.update_status_msg = ""
+    _recover_running_update_session()
+
+
+def _recover_running_update_session() -> None:
+    """새로고침·새 세션에서도 백그라운드 수집이 살아 있으면 진행 표시 복구."""
+    if st.session_state.incremental_update_running:
+        return
+    from update_status import read_update_status
+
+    status = read_update_status()
+    pid = status.get("pid")
+    if not status.get("running") or not isinstance(pid, int) or not _is_pid_alive(pid):
+        return
+    st.session_state.incremental_update_running = True
+    st.session_state.incremental_update_pid = pid
+    st.session_state.update_in_progress = True
+    st.session_state.pop("_update_finish_applied", None)
 
 
 _UPDATE_PROGRESS_MSG = "국토부 최신 데이터를 수집 중입니다. (기존 데이터 조회 가능)"
@@ -639,19 +671,46 @@ def _render_live_update_progress() -> None:
         or st.session_state.get("incremental_update_running")
     ):
         return
+    from update_status import read_update_status
+
     _sync_update_progress_from_file()
-    pct = float(st.session_state.get("update_progress_percent", 0)) / 100.0
-    st.progress(min(max(pct, 0.0), 1.0))
+    status = read_update_status()
+    mode = str(status.get("mode") or "데이터 수집")
+    pct_int = int(st.session_state.get("update_progress_percent", 0))
+    st.markdown(f"**⏳ {mode} 진행 중 · {pct_int}%**")
+    st.progress(min(max(pct_int / 100.0, 0.0), 1.0))
     status_msg = st.session_state.get("update_status_msg") or _UPDATE_PROGRESS_MSG
     st.caption(status_msg)
+    timing = _format_update_timing(status)
+    if timing:
+        st.caption(timing)
     st.caption("메인 화면은 기존 캐시 데이터를 계속 표시합니다.")
+
+
+def _format_update_timing(status: dict) -> str:
+    """경과 시간 + 진행률 기반 남은 시간 추정."""
+    started = status.get("started_at")
+    if not isinstance(started, (int, float)):
+        return ""
+    elapsed = max(time.time() - float(started), 0.0)
+    ratio = float(status.get("ratio") or 0.0)
+
+    def _fmt(sec: float) -> str:
+        m, s_ = divmod(int(sec), 60)
+        return f"{m}분 {s_}초" if m else f"{s_}초"
+
+    text = f"경과 {_fmt(elapsed)}"
+    if 0.02 <= ratio < 1.0:
+        text += f" · 남은 예상 약 {_fmt(elapsed * (1 - ratio) / ratio)}"
+    return text
 
 
 def _start_subprocess_fetch(*extra_args: str) -> None:
     """Streamlit과 분리된 OS 프로세스에서 fetch_data.py 실행."""
     from update_status import UPDATE_LOG_FILE, reset_update_status
 
-    reset_update_status(_UPDATE_PROGRESS_MSG)
+    # pid=-1: fetch_data.py가 시작하며 자기 pid·모드로 덮어씀
+    reset_update_status(_UPDATE_PROGRESS_MSG, pid=-1)
     log_path = UPDATE_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "w", encoding="utf-8")
@@ -692,7 +751,7 @@ def _finish_background_update(status: dict) -> None:
     if err:
         st.session_state["_pending_update_notice"] = ("error", str(err))
     elif status.get("done"):
-        st.session_state["_pending_update_notice"] = ("success", "매매·전월세 업데이트 완료")
+        st.session_state["_pending_update_notice"] = ("success", f"✅ {final_msg}")
     else:
         st.session_state["_pending_update_notice"] = (
             "info",
@@ -715,7 +774,8 @@ def _monitor_background_subprocess() -> None:
 
     status = read_update_status()
     pid = st.session_state.get("incremental_update_pid")
-    proc_alive = _is_pid_alive(pid)
+    # 완료·오류 기록이 있으면 프로세스 상태와 무관하게 즉시 종료 처리
+    proc_alive = not (status.get("done") or status.get("error")) and _is_pid_alive(pid)
 
     if proc_alive:
         time.sleep(1.5)
@@ -794,6 +854,8 @@ def _render_backfill_controls(update_disabled: bool) -> None:
     start_ymd = f"{year}{month:02d}"
     months = max((now.year - year) * 12 + (now.month - month) + 1, 0)
     st.caption(f"예상 API 호출: 약 {len(selected) * months * 2:,}회 (매매+전월세)")
+    if update_disabled:
+        _render_live_update_progress()
     if st.button(
         "🎯 선택 범위만 재수집",
         use_container_width=True,
