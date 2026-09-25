@@ -15,7 +15,7 @@ DATA_START_YMD = "201401"
 RECENT_REFRESH_MONTHS = 2
 
 # 수집 파이프라인 버전 — 변경 시 update_cache가 캐시 재처리·보충 병합을 강제 실행
-CRAWL_DATA_VERSION = "v12_smart_incremental_update"
+CRAWL_DATA_VERSION = "v13_leadersone_29py"
 
 # 국토부 API aptNm(아파트) 공식·변형 명칭 — fetch/classify_row_at_ingest 매칭용
 CRAWL_APARTMENT_API_NAMES = [
@@ -210,3 +210,15 @@ DH_BANGBAE_PYEONG_DISPLAY = {
     "24평형": "25평",
     "34평형": "32평",
 }
+
+# ---------------------------------------------------------------------------
+# 래미안 리더스원 — 일반 24·34평형 + 전용 74㎡대(29평)를 24평형 그룹에 포함
+# ---------------------------------------------------------------------------
+LEADERSONE_DONG = "서초동"
+LEADERSONE_APT_NAME = "리더스원"
+# (내부 평형그룹, 최소㎡, 최대㎡ 미만, UI 표기)
+LEADERSONE_AREA_RULES = [
+    ("24평형", 57.0, 63.0, "24평"),
+    ("24평형", 74.0, 76.0, "29평"),  # 74㎡대 → 내부 24평형, UI 29평
+    ("34평형", 82.0, 87.0, "34평"),
+]
