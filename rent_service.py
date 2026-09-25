@@ -479,11 +479,17 @@ def load_cached_rent_data() -> pd.DataFrame:
     return purge_rent_sale_cross_contamination(filter_rent_transactions(raw))
 
 
-def save_cached_rent_data(df: pd.DataFrame) -> None:
-    from database import RENT_DEDUP_COLUMNS, RENTS_TABLE, write_table
+def save_cached_rent_data(
+    df: pd.DataFrame,
+    *,
+    slots: set[tuple[str, str]] | None = None,
+) -> None:
+    """전월세 캐시 저장. slots 지정 시 해당 (지역×월) 행만 교체 — 테이블 잠금 없이 중간 저장."""
+    from data_service import save_slot_rows_or_full
+    from database import RENT_DEDUP_COLUMNS, RENTS_TABLE
 
     out = purge_rent_sale_cross_contamination(filter_rent_transactions(df))
-    write_table(out, RENTS_TABLE, dedup_columns=RENT_DEDUP_COLUMNS)
+    save_slot_rows_or_full(out, RENTS_TABLE, RENT_DEDUP_COLUMNS, slots)
 
 
 def clear_rent_cache_file() -> None:
@@ -564,6 +570,8 @@ def update_rent_cache(
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
+    # 마지막 중간 저장 이후 API 조회에 성공한 슬롯 — DB에는 이 슬롯 행만 교체 저장
+    pending_slots: set[tuple[str, str]] = set()
     prev_flush_year: str | None = None
 
     try:
@@ -578,15 +586,16 @@ def update_rent_cache(
         pass
 
     def _flush_rent_frames(*, reason: str = "") -> None:
-        nonlocal cached, new_frames
-        if not new_frames:
+        nonlocal cached, new_frames, pending_slots
+        if not new_frames and not pending_slots:
             return
         try:
             before = len(cached)
             cached = merge_rent_crawl_into_cache(cached, new_frames)
             new_frames = []
+            touched, pending_slots = pending_slots, set()
             if not cached.empty:
-                save_cached_rent_data(cached)
+                save_cached_rent_data(cached, slots=touched)
             tag = f" ({reason})" if reason else ""
             print(
                 f"[SAVE] [전월세] 중간 저장{tag} - "
@@ -613,6 +622,7 @@ def update_rent_cache(
         try:
             chunk = fetch_apt_rent_data(service_key, lawd_cd, deal_ymd)
             fetch_ok = True
+            pending_slots.add(slot)
             if is_refresh:
                 before_drop = len(cached)
                 cached = drop_cache_slots(cached, {slot})
@@ -649,7 +659,7 @@ def update_rent_cache(
             time.sleep(API_SLEEP_SEC)
 
         next_lawd = tasks[idx][0] if idx < len(tasks) else None
-        if next_lawd is not None and next_lawd != lawd_cd and new_frames:
+        if next_lawd is not None and next_lawd != lawd_cd and (new_frames or pending_slots):
             _flush_rent_frames(reason=f"{region} 완료")
 
         if (
@@ -661,13 +671,7 @@ def update_rent_cache(
             _flush_rent_frames(reason=f"{year}년 완료")
             prev_flush_year = year
 
-    if new_frames:
-        _flush_rent_frames(reason="최종 병합")
-
-    if not cached.empty:
-        #cached = enforce_strict_pyeong_on_rent_dataframe(cached)#
-        cached = dedupe_rent_cache_rows(cached)
-        save_cached_rent_data(cached)
+    _flush_rent_frames(reason="최종 병합")
 
     from data_service import reprocess_rent_cache
 

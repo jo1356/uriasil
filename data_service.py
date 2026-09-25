@@ -1875,11 +1875,37 @@ def load_cached_data() -> pd.DataFrame:
     return filter_sale_transactions(raw)
 
 
-def save_cached_data(df: pd.DataFrame) -> None:
+def save_cached_data(
+    df: pd.DataFrame,
+    *,
+    slots: set[tuple[str, str]] | None = None,
+) -> None:
+    """매매 캐시 저장. slots 지정 시 해당 (지역×월) 행만 교체 — 테이블 잠금 없이 중간 저장."""
     from database import SALE_DEDUP_COLUMNS, SALES_TABLE, write_table
 
     out = filter_sale_transactions(df)
-    write_table(out, SALES_TABLE, dedup_columns=SALE_DEDUP_COLUMNS)
+    save_slot_rows_or_full(out, SALES_TABLE, SALE_DEDUP_COLUMNS, slots)
+
+
+def save_slot_rows_or_full(
+    df: pd.DataFrame,
+    table_name: str,
+    dedup_columns: list[str],
+    slots: set[tuple[str, str]] | None,
+) -> None:
+    """슬롯 단위 교체 시도 → 실패(컬럼·타입 불일치 등) 시 전체 테이블 저장으로 대체."""
+    from database import replace_slot_rows, write_table
+
+    if slots is None:
+        write_table(df, table_name, dedup_columns=dedup_columns)
+        return
+    if not slots:
+        return
+    try:
+        replace_slot_rows(df, table_name, slots, dedup_columns=dedup_columns)
+    except Exception as exc:
+        _log_row_parse_error(f"replace_slot_rows:{table_name}", exc)
+        write_table(df, table_name, dedup_columns=dedup_columns)
 
 
 def clear_cache_file() -> None:
@@ -1963,6 +1989,8 @@ def update_cache(
 
     total_tasks = len(tasks)
     new_frames: list[pd.DataFrame] = []
+    # 마지막 중간 저장 이후 API 조회에 성공한 슬롯 — DB에는 이 슬롯 행만 교체 저장
+    pending_slots: set[tuple[str, str]] = set()
 
     try:
         print(
@@ -1977,12 +2005,14 @@ def update_cache(
 
     def _flush_sale_frames(*, final: bool = False, reason: str = "") -> None:
         """force_rebuild 중에도 월별 수집분을 디스크에 누적 저장."""
-        nonlocal cached, new_frames
-        if not new_frames:
+        nonlocal cached, new_frames, pending_slots
+        if not new_frames and not pending_slots:
             return
         try:
-            new_df = enforce_strict_pyeong_on_dataframe(
-                pd.concat(new_frames, ignore_index=True)
+            new_df = (
+                enforce_strict_pyeong_on_dataframe(pd.concat(new_frames, ignore_index=True))
+                if new_frames
+                else pd.DataFrame()
             )
             if not new_df.empty:
                 cached = (
@@ -2002,8 +2032,10 @@ def update_cache(
                     ],
                     keep="last",
                 )
-                save_cached_data(cached)
+            if not cached.empty:
+                save_cached_data(cached, slots=pending_slots)
             new_frames = []
+            pending_slots = set()
             if reason:
                 try:
                     print(
@@ -2047,6 +2079,7 @@ def update_cache(
         finally:
             if fetch_ok:
                 mark_slots_fetched("sale", [slot])
+                pending_slots.add(slot)
             time.sleep(API_SLEEP_SEC)
 
         next_lawd = tasks[idx][0] if idx < len(tasks) else None
@@ -2056,21 +2089,9 @@ def update_cache(
         if idx % 10 == 0:
             _flush_sale_frames(reason=f"{idx}/{total_tasks} 슬롯")
 
-    if new_frames:
-        _flush_sale_frames(final=True, reason="최종 병합")
+    _flush_sale_frames(final=True, reason="최종 병합")
 
-    if not cached.empty:
-        try:
-            cached = enforce_strict_pyeong_on_dataframe(cached)
-            cached = cached.drop_duplicates(
-                subset=["조회지역코드", "조회계약년월", "아파트", "계약일자", "거래금액(만원)", "전용면적(㎡)", "층"],
-                keep="last",
-            )
-            save_cached_data(cached)
-        except Exception as exc:
-            _log_row_parse_error("save_sale_cache", exc)
-
-    # 매매 캐시만 재처리 — 전월세 캐시는 rent_service.update_rent_cache에서만 갱신
+    # 매매 캐시만 재처리 (평형 규칙 재적용·중복 제거 후 1회 전체 저장) — 전월세 캐시는 rent_service.update_rent_cache에서만 갱신
     reprocess_sale_cache()
     cached = load_cached_data()
     _write_crawl_version_stamp()

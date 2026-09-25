@@ -239,6 +239,56 @@ def write_table(
     return len(out)
 
 
+SLOT_COLUMNS = ("조회지역코드", "조회계약년월")
+
+
+def replace_slot_rows(
+    df: pd.DataFrame,
+    table_name: str,
+    slots: set[tuple[str, str]],
+    *,
+    dedup_columns: list[str] | None = None,
+) -> int:
+    """
+    (조회지역코드, 조회계약년월) 슬롯 행만 DELETE 후 INSERT.
+    write_table(replace)은 DROP TABLE로 트랜잭션 내내 테이블을 잠가 앱 조회가 멈추므로,
+    수집 중간 저장은 이 함수로 해당 슬롯만 교체합니다 (MVCC — 읽기 차단 없음).
+    """
+    if not slots:
+        return 0
+    if not table_exists(table_name) or df.empty or not set(SLOT_COLUMNS).issubset(df.columns):
+        return write_table(df, table_name, dedup_columns=dedup_columns)
+
+    slot_keys = {(str(lawd), str(ym)) for lawd, ym in slots}
+    key_series = list(zip(df["조회지역코드"].astype(str), df["조회계약년월"].astype(str)))
+    out = df.loc[[k in slot_keys for k in key_series]].copy()
+    if dedup_columns:
+        out = _dedupe(out, dedup_columns)
+    table_cols = [c["name"] for c in inspect(get_engine()).get_columns(table_name)]
+    out = out[[c for c in out.columns if c in table_cols]]
+
+    params = [{"lawd": lawd, "ym": ym} for lawd, ym in sorted(slot_keys)]
+    with get_engine().begin() as conn:
+        conn.execute(
+            text(
+                f'DELETE FROM "{table_name}" '
+                'WHERE CAST("조회지역코드" AS TEXT) = :lawd '
+                'AND CAST("조회계약년월" AS TEXT) = :ym'
+            ),
+            params,
+        )
+        if not out.empty:
+            out.to_sql(
+                table_name,
+                conn,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=500,
+            )
+    return len(out)
+
+
 def clear_table(table_name: str) -> None:
     engine = get_engine()
     with engine.begin() as conn:
