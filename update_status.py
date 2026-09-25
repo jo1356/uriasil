@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +32,12 @@ def write_update_status(
     total_steps: int | None = None,
 ) -> None:
     ratio_f = float(max(0.0, min(1.0, ratio)))
+    prev = read_update_status()
     payload: dict[str, Any] = {
+        # 수집 모드·시작 시각·프로세스 — 진행 중 갱신에도 유지 (UI 모드 표시·경과시간·새로고침 복구용)
+        "mode": prev.get("mode", ""),
+        "started_at": prev.get("started_at", time.time()),
+        "pid": prev.get("pid") or os.getpid(),
         "ratio": ratio_f,
         "percent": int(round(ratio_f * 100)),
         "message": str(message),
@@ -50,13 +57,24 @@ def write_update_status(
 
 def reset_update_status(
     message: str = "최근 2개월 누락 데이터를 확인하고 수집 중입니다...",
+    *,
+    mode: str = "",
+    pid: int | None = None,
 ) -> None:
-    """수집 시작 — UI에는 스피너 문구만 노출."""
+    """수집 시작 — 모드·시작 시각·프로세스 ID 기록."""
+    UPDATE_STATUS_FILE.write_text(
+        json.dumps(
+            {"mode": mode, "started_at": time.time(), "pid": pid or os.getpid()},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     write_update_status(0.0, message, running=True, done=False, error=None)
 
 
 def finish_update_status(*, error: str | None = None) -> None:
+    mode = read_update_status().get("mode") or "매매·전월세 업데이트"
     if error:
         write_update_status(1.0, f"오류: {error}", running=False, done=True, error=error)
     else:
-        write_update_status(1.0, "매매·전월세 업데이트 완료", running=False, done=True)
+        write_update_status(1.0, f"{mode} 완료", running=False, done=True)
