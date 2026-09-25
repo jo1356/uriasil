@@ -495,6 +495,7 @@ def clear_rent_cache_file() -> None:
 def update_rent_cache(
     progress: ProgressCallback = None,
     force_rebuild: bool = False,
+    backfill_slots: list[tuple[str, str]] | None = None,
 ) -> pd.DataFrame:
     from datetime import datetime
 
@@ -505,7 +506,9 @@ def update_rent_cache(
     from data_service import (
         clear_slot_manifest,
         crawl_version_changed,
+        _update_mode_label,
         drop_cache_slots,
+        log_backfill_plan,
         log_incremental_refresh_plan,
         mark_slots_fetched,
         prepare_incremental_cache_update,
@@ -530,6 +533,12 @@ def update_rent_cache(
         clear_slot_manifest("rent")
         cached = pd.DataFrame()
         tasks = [(lawd, ym) for lawd in lawd_codes for ym in all_months]
+    elif backfill_slots is not None:
+        cached = load_rent_cache_raw()
+        tasks = list(backfill_slots)
+        refresh_slots = set(tasks)
+        all_months = sorted({ym for _, ym in tasks})
+        log_backfill_plan("전월세", tasks)
     else:
         cached = load_rent_cache_raw()
         (
@@ -560,7 +569,7 @@ def update_rent_cache(
     try:
         print(
             f"[START] [전월세] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
+            f"{total_tasks} 슬롯 ({_update_mode_label(force_rebuild, backfill_slots)})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):

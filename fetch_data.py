@@ -5,6 +5,8 @@
   python fetch_data.py                  # 누락 월 API 수집 + 캐시 재처리·보충 병합
   python fetch_data.py --rebuild        # 캐시 삭제 후 2014~현재 전체 재수집
   python fetch_data.py --reprocess      # API 없이 CSV 재처리·data.csv 보충만
+  python fetch_data.py --backfill-lawd 11650 --backfill-from 202001
+                                        # 선택 구 × 지정월~현재만 재수집 (기존 캐시 유지)
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from data_service import (
     print_rent_collection_latest_date_debug,
     rebuild_cache_from_scratch,
     refresh_local_cache_files,
+    run_backfill_update,
     run_smart_incremental_update,
     validate_service_key,
 )
@@ -65,7 +68,20 @@ def main() -> None:
         action="store_true",
         help="전월세만 수집/재처리",
     )
+    parser.add_argument(
+        "--backfill-lawd",
+        nargs="+",
+        metavar="LAWD_CD",
+        help="부분 재수집할 지역코드 (예: 11650). --backfill-from과 함께 사용",
+    )
+    parser.add_argument(
+        "--backfill-from",
+        metavar="YYYYMM",
+        help="부분 재수집 시작월 (예: 202001) ~ 현재월",
+    )
     args = parser.parse_args()
+    if bool(args.backfill_lawd) != bool(args.backfill_from):
+        parser.error("--backfill-lawd와 --backfill-from은 함께 지정해야 합니다.")
 
     print("=" * 60)
     print("  fetch_data.py - 국토부 API 수집")
@@ -89,6 +105,8 @@ def main() -> None:
     print(f"  전월세: {rent_status['rows']:,}건 ({rent_status['filled_slots']}/{rent_status['total_slots']})")
     if args.rebuild:
         print("  모드: 전체 재수집")
+    elif args.backfill_lawd:
+        print(f"  모드: 부분 재수집 ({', '.join(args.backfill_lawd)} · {args.backfill_from}~)")
     print("-" * 60)
 
     def progress(ratio: float, msg: str) -> None:
@@ -124,7 +142,12 @@ def main() -> None:
             finish_update_status()
             return
 
-        if args.rebuild:
+        if args.backfill_lawd:
+            sale_df, rent_df = run_backfill_update(
+                args.backfill_lawd, args.backfill_from, progress
+            )
+            print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n", flush=True)
+        elif args.rebuild:
             sale_df = rebuild_cache_from_scratch(progress)
             rent_df = rebuild_rent_cache_from_scratch(progress)
             print(f"\n  매매: {len(sale_df):,}건 / 전월세: {len(rent_df):,}건\n", flush=True)

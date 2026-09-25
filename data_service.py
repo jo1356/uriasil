@@ -1292,6 +1292,46 @@ def log_incremental_refresh_plan(
     )
 
 
+def build_backfill_slots(
+    lawd_codes: list[str],
+    start_ymd: str,
+    *,
+    as_of: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """부분 재수집 슬롯 — 선택한 구 × start_ymd~현재월."""
+    allowed = _as_list(config.LAWD_CD)
+    unknown = [cd for cd in lawd_codes if cd not in allowed]
+    if unknown:
+        raise ValueError(f"config.LAWD_CD에 없는 지역코드: {', '.join(unknown)}")
+    start = max(str(start_ymd), get_data_start_ymd())
+    months = generate_month_range(start, end=as_of or datetime.now())
+    return [(lawd, ym) for lawd in lawd_codes for ym in months]
+
+
+def log_backfill_plan(kind_label: str, tasks: list[tuple[str, str]]) -> None:
+    if not tasks:
+        return
+    lawds = sorted({lawd for lawd, _ in tasks})
+    months = sorted({ym for _, ym in tasks})
+    print(
+        f"[BACKFILL] [{kind_label}] 부분 재수집 {', '.join(lawds)} · "
+        f"{months[0][:4]}.{months[0][4:]}~{months[-1][:4]}.{months[-1][4:]} · "
+        f"{len(tasks)}슬롯 (기존 행 덮어쓰기, 나머지 캐시 유지)",
+        flush=True,
+    )
+
+
+def _update_mode_label(
+    force_rebuild: bool,
+    backfill_slots: list[tuple[str, str]] | None,
+) -> str:
+    if force_rebuild:
+        return "전체 재수집"
+    if backfill_slots is not None:
+        return "부분 재수집"
+    return "차분(누락+최근2개월)"
+
+
 def drop_cache_slots(
     df: pd.DataFrame,
     slots: set[tuple[str, str]],
@@ -1827,10 +1867,12 @@ def rebuild_cache_from_scratch(progress: ProgressCallback = None) -> pd.DataFram
 def update_cache(
     progress: ProgressCallback = None,
     force_rebuild: bool = False,
+    backfill_slots: list[tuple[str, str]] | None = None,
 ) -> pd.DataFrame:
     """
     캐시 CSV를 읽고, 누락된 (지역×월)만 API로 추가 수집합니다.
     force_rebuild=True 이면 캐시를 비우고 2014-01~현재월 전체를 재수집합니다.
+    backfill_slots 지정 시 해당 (지역×월)만 재수집·덮어쓰기합니다 (나머지 캐시 유지).
     수집 시점마다 전용면적(㎡)으로 24/34평형만 분류·저장합니다.
     """
     service_key = validate_service_key()
@@ -1854,6 +1896,12 @@ def update_cache(
         cached = pd.DataFrame()
         tasks = [(lawd, ym) for lawd in lawd_codes for ym in all_months]
         refresh_slots = set()
+    elif backfill_slots is not None:
+        cached = load_cached_data()
+        tasks = list(backfill_slots)
+        refresh_slots = set(tasks)
+        all_months = sorted({ym for _, ym in tasks})
+        log_backfill_plan("매매", tasks)
     else:
         cached = load_cached_data()
         (
@@ -1883,7 +1931,7 @@ def update_cache(
     try:
         print(
             f"[START] [매매] {len(lawd_codes)}개 구 x {len(all_months)}개월 = "
-            f"{total_tasks} 슬롯 ({'전체 재수집' if force_rebuild else '차분(누락+최근2개월)'})",
+            f"{total_tasks} 슬롯 ({_update_mode_label(force_rebuild, backfill_slots)})",
             flush=True,
         )
         for i, cd in enumerate(lawd_codes):
@@ -2062,6 +2110,29 @@ def run_smart_incremental_update(
 
     sale_df = update_cache(progress=sale_progress, force_rebuild=False)
     rent_df = update_rent_cache(progress=rent_progress, force_rebuild=False)
+    return sale_df, rent_df
+
+
+def run_backfill_update(
+    lawd_codes: list[str],
+    start_ymd: str,
+    progress: ProgressCallback = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """선택한 구 × start_ymd~현재월만 매매·전월세 재수집 (기존 캐시 유지)."""
+    from rent_service import update_rent_cache
+
+    slots = build_backfill_slots(lawd_codes, start_ymd)
+
+    def sale_progress(ratio: float, msg: str) -> None:
+        if progress:
+            progress(min(ratio * 0.5, 0.5), f"[매매] {msg}")
+
+    def rent_progress(ratio: float, msg: str) -> None:
+        if progress:
+            progress(0.5 + min(ratio, 1.0) * 0.5, f"[전월세] {msg}")
+
+    sale_df = update_cache(progress=sale_progress, backfill_slots=slots)
+    rent_df = update_rent_cache(progress=rent_progress, backfill_slots=slots)
     return sale_df, rent_df
 
 
