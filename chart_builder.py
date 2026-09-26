@@ -256,7 +256,7 @@ def build_price_chart(
             zeroline=False,
         ),
         legend=dict(
-            title=dict(text="아파트 단지(평형)", font=dict(size=11, color="#1f2937")),
+            title=dict(text="아파트 단지(평)", font=dict(size=11, color="#1f2937")),
             orientation="h",
             yanchor="bottom",
             y=1.03,

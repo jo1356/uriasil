@@ -1196,7 +1196,13 @@ def _format_pyeong_for_apt(apt_name: str | None, pyeong: str) -> str:
         return _SINHYUNDAI_PYEONG_DISPLAY.get(pyeong, pyeong)
     if apt_name and _is_dh_bangbae_apt(apt_name):
         return _DH_BANGBAE_PYEONG_DISPLAY.get(pyeong, pyeong)
-    return pyeong
+    return _pyeong_ui_text(pyeong)
+
+
+def _pyeong_ui_text(pyeong: str) -> str:
+    """UI 표기 통일 — 내부 그룹명 '24평형'·'34평형'은 화면에 '24평'·'34평'으로."""
+    text = str(pyeong)
+    return text[:-1] if text.endswith("평형") else text
 
 
 def _extract_label_parts(label: str) -> tuple[str, str]:
@@ -1228,6 +1234,8 @@ def _format_chart_label_display(label: str) -> str:
     if _is_dh_bangbae_apt(apt):
         display_p = _DH_BANGBAE_PYEONG_DISPLAY.get(pyeong, pyeong)
         return f"{apt} ({display_p})"
+    if pyeong:
+        return f"{apt} ({_pyeong_ui_text(pyeong)})"
     return label
 
 
