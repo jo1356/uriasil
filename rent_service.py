@@ -13,7 +13,10 @@ import pandas as pd
 import config
 from data_service import (
     API_MAX_PAGES,
+    API_OK_RESULT_CODES,
     API_SLEEP_SEC,
+    ApiFetchError,
+    record_slot_result,
     TRANSACTION_TYPE_RENT,
     TRANSACTION_TYPE_SALE,
     TargetDict,
@@ -193,36 +196,27 @@ def fetch_apt_rent_data(
             }
             response = _requests_get_with_retries(RENT_API_URL, params, context=page_ctx)
             if response is None:
-                break
+                raise ApiFetchError(f"응답 없음(시간 초과·연결 실패) page={page_no}")
 
             if response.status_code == 403:
-                _log_api_fetch_error(
-                    page_ctx,
-                    RuntimeError(
-                        "전월세 API 권한 없음(403). 공공데이터포털에서 "
-                        "'국토교통부_아파트 전월세 실거래가 자료' 활용 신청 후 "
-                        "SERVICE_KEY로 다시 수집해 주세요."
-                    ),
+                raise ApiFetchError(
+                    "전월세 API 권한 없음(403). 공공데이터포털에서 "
+                    "'국토교통부_아파트 전월세 실거래가 자료' 활용 신청 후 "
+                    "SERVICE_KEY로 다시 수집해 주세요."
                 )
-                break
 
             root = _parse_api_xml_root(response.content, context=page_ctx)
             if root is None:
-                break
+                raise ApiFetchError(f"응답 해석 실패 page={page_no}")
 
             auth_error = _text(root.find(".//returnAuthMsg"))
             if auth_error:
-                _log_api_fetch_error(page_ctx, RuntimeError(f"인증키 오류: {auth_error}"))
-                break
+                raise ApiFetchError(f"인증키 오류: {auth_error}")
 
             result_code = _text(root.find(".//resultCode"))
             result_msg = _text(root.find(".//resultMsg"))
-            if result_code and result_code not in ("00", "000"):
-                _log_api_fetch_error(
-                    page_ctx,
-                    RuntimeError(f"API 오류 ({result_code}): {result_msg}"),
-                )
-                break
+            if result_code and result_code not in API_OK_RESULT_CODES:
+                raise ApiFetchError(f"API 오류 ({result_code}): {result_msg}")
 
             items = root.findall(".//item") or []
             if not items:
@@ -246,9 +240,10 @@ def fetch_apt_rent_data(
             if len(items) < page_size:
                 break
             page_no += 1
+        except ApiFetchError:
+            raise
         except Exception as exc:
-            _log_api_fetch_error(page_ctx, exc)
-            break
+            raise ApiFetchError(f"{type(exc).__name__}: {exc}") from exc
 
     return pd.DataFrame(all_rows)
 
@@ -627,6 +622,7 @@ def update_rent_cache(
         try:
             chunk = fetch_apt_rent_data(service_key, lawd_cd, deal_ymd)
             fetch_ok = True
+            record_slot_result("전월세", slot)
             pending_slots.add(slot)
             if is_refresh:
                 before_drop = len(cached)
@@ -645,6 +641,8 @@ def update_rent_cache(
             _flush_rent_frames(reason=f"{region} {deal_ymd}")
         except Exception as exc:
             _log_api_fetch_error(f"[전월세] {region} {deal_ymd}", exc)
+            if not fetch_ok:
+                record_slot_result("전월세", slot, exc)
             print(f"[ERR] [{year}년 {month}월] {region} 전월세 오류 - skip ({exc})", flush=True)
             if progress:
                 progress(

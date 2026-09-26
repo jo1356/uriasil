@@ -38,6 +38,9 @@ def write_update_status(
         "mode": prev.get("mode", ""),
         "started_at": prev.get("started_at", time.time()),
         "pid": prev.get("pid") or os.getpid(),
+        # 슬롯(지역×월) 조회 결과 — {"매매": 성공 수, ...} / [{"kind","lawd","ym","error"}, ...]
+        "slot_ok": prev.get("slot_ok", {}),
+        "slot_failed": prev.get("slot_failed", []),
         "ratio": ratio_f,
         "percent": int(round(ratio_f * 100)),
         "message": str(message),
@@ -53,6 +56,28 @@ def write_update_status(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def record_slot_result(
+    kind: str,
+    lawd_cd: str,
+    deal_ymd: str,
+    *,
+    error: str | None = None,
+) -> None:
+    """(지역×월) 조회 성공·실패 누적 — 진행바에 성공/실패 개수·실패 목록 표시용."""
+    data = read_update_status()
+    if not data:
+        return
+    if error is None:
+        ok = dict(data.get("slot_ok") or {})
+        ok[kind] = int(ok.get(kind, 0)) + 1
+        data["slot_ok"] = ok
+    else:
+        failed = list(data.get("slot_failed") or [])
+        failed.append({"kind": kind, "lawd": str(lawd_cd), "ym": str(deal_ymd), "error": str(error)[:200]})
+        data["slot_failed"] = failed
+    UPDATE_STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def reset_update_status(
