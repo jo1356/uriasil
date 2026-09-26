@@ -702,7 +702,65 @@ def _render_live_update_progress() -> None:
     timing = _format_update_timing(status)
     if timing:
         st.caption(timing)
+    _render_slot_results(status)
     st.caption("메인 화면은 기존 캐시 데이터를 계속 표시합니다.")
+
+
+def _region_name(lawd_cd: str) -> str:
+    codes = _as_list(config.LAWD_CD)
+    names = list(getattr(config, "REGION_NAME", []))
+    try:
+        i = codes.index(str(lawd_cd))
+        return names[i] if i < len(names) else str(lawd_cd)
+    except ValueError:
+        return str(lawd_cd)
+
+
+def _render_slot_results(status: dict) -> None:
+    """월별 조회 성공/실패 개수 + 실패한 달 목록 (다시 받아야 할 범위 확인용)."""
+    ok = status.get("slot_ok") or {}
+    failed = status.get("slot_failed") or []
+    if not ok and not failed:
+        return
+    parts = []
+    for kind in ("매매", "전월세"):
+        n_ok = int(ok.get(kind, 0))
+        n_fail = sum(1 for f in failed if f.get("kind") == kind)
+        if n_ok or n_fail:
+            parts.append(f"{kind} ✅ {n_ok} · ❌ {n_fail}")
+    st.caption("월별 조회 결과 — " + " / ".join(parts))
+    if not failed:
+        return
+    with st.expander(f"❌ 실패한 달 {len(failed)}개 — 다시 받아야 할 범위", expanded=False):
+        lines = [
+            f"- {f.get('kind')} · {_region_name(f.get('lawd', ''))} · "
+            f"{str(f.get('ym', ''))[:4]}.{str(f.get('ym', ''))[4:]} — {f.get('error', '')}"
+            for f in failed
+        ]
+        st.markdown("\n".join(lines))
+        earliest = min(str(f.get("ym", "")) for f in failed)
+        st.caption(
+            f"🎯 부분 재수집에서 해당 구 · {earliest[:4]}년 {int(earliest[4:])}월부터 "
+            "다시 받으면 채워집니다. 실패한 달의 기존 데이터는 지워지지 않았습니다."
+        )
+
+
+def _render_last_update_result() -> None:
+    """수집 종료 후 — 마지막 수집의 성공/실패 결과를 계속 표시."""
+    from update_status import read_update_status
+
+    status = read_update_status()
+    if not status.get("done"):
+        return
+    if not (status.get("slot_ok") or status.get("slot_failed")):
+        return
+    finished = status.get("finished_at")
+    when = ""
+    if isinstance(finished, (int, float)):
+        when = pd.Timestamp(finished, unit="s", tz="UTC").tz_convert("Asia/Seoul").strftime("%m/%d %H:%M")
+    mode = str(status.get("mode") or "데이터 수집")
+    st.caption(f"📋 마지막 수집: {mode}" + (f" · {when} 완료" if when else ""))
+    _render_slot_results(status)
 
 
 def _format_update_timing(status: dict) -> str:
@@ -835,6 +893,8 @@ def _render_sidebar_update_controls() -> None:
             st.error(str(exc))
 
     _render_update_progress_sidebar()
+    if not st.session_state.incremental_update_running:
+        _render_last_update_result()
 
     st.caption(
         f"{len(_as_list(config.LAWD_CD))}개 구역 · "

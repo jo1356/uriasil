@@ -94,6 +94,22 @@ AREA_M2_STRICT_RULES: list[tuple[str, float, float]] = [
 ]
 
 TargetDict = dict[str, str | bool]
+# 국토부 API 정상 코드 (03 = 데이터 없음 — 정상 빈 결과)
+API_OK_RESULT_CODES = ("00", "000", "03")
+
+
+class ApiFetchError(RuntimeError):
+    """국토부 API 조회 실패 — 해당 (지역×월)은 기존 데이터를 지우지 않고 실패로 기록."""
+
+
+def record_slot_result(kind_label: str, slot: tuple[str, str], error: object = None) -> None:
+    """진행 상태 파일에 슬롯 성공·실패 기록 (UI 성공/실패 개수·실패 목록). 기록 실패는 수집에 영향 없음."""
+    try:
+        from update_status import record_slot_result as _record
+
+        _record(kind_label, slot[0], slot[1], error=None if error is None else str(error))
+    except Exception:
+        pass
 ProgressCallback = Callable[[float, str], None] | None
 
 _GAEPO_WOOSUNG_APT_RE = re.compile(
@@ -1660,25 +1676,20 @@ def fetch_apt_trade_data(
             }
             response = _requests_get_with_retries(API_URL, params, context=page_ctx)
             if response is None:
-                break
+                raise ApiFetchError(f"응답 없음(시간 초과·연결 실패) page={page_no}")
 
             root = _parse_api_xml_root(response.content, context=page_ctx)
             if root is None:
-                break
+                raise ApiFetchError(f"응답 해석 실패 page={page_no}")
 
             auth_error = _text(root.find(".//returnAuthMsg"))
             if auth_error:
-                _log_api_fetch_error(page_ctx, RuntimeError(f"인증키 오류: {auth_error}"))
-                break
+                raise ApiFetchError(f"인증키 오류: {auth_error}")
 
             result_code = _text(root.find(".//resultCode"))
             result_msg = _text(root.find(".//resultMsg"))
-            if result_code and result_code not in ("00", "000"):
-                _log_api_fetch_error(
-                    page_ctx,
-                    RuntimeError(f"API 오류 ({result_code}): {result_msg}"),
-                )
-                break
+            if result_code and result_code not in API_OK_RESULT_CODES:
+                raise ApiFetchError(f"API 오류 ({result_code}): {result_msg}")
 
             items = root.findall(".//item") or []
             if not items:
@@ -1702,9 +1713,10 @@ def fetch_apt_trade_data(
             if len(items) < page_size:
                 break
             page_no += 1
+        except ApiFetchError:
+            raise
         except Exception as exc:
-            _log_api_fetch_error(page_ctx, exc)
-            break
+            raise ApiFetchError(f"{type(exc).__name__}: {exc}") from exc
 
     return pd.DataFrame(all_rows)
 
@@ -2077,6 +2089,7 @@ def update_cache(
         try:
             chunk = fetch_apt_trade_data(service_key, lawd_cd, deal_ymd)
             fetch_ok = True
+            record_slot_result("매매", slot)
             if slot in refresh_slots:
                 cached = drop_cache_slots(cached, {slot})
             if chunk is not None and not chunk.empty:
@@ -2086,6 +2099,8 @@ def update_cache(
                 new_frames.append(chunk)
         except Exception as exc:
             _log_api_fetch_error(f"{region} {deal_ymd}", exc)
+            if not fetch_ok:
+                record_slot_result("매매", slot, exc)
             if progress:
                 progress(
                     idx / max(total_tasks, 1),
