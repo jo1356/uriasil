@@ -2249,7 +2249,18 @@ def default_chart_selection(
     groups = default_pyeong_groups if default_pyeong_groups is not None else target_pyeong
     if not groups:
         return all_labels
-    selected = [lb for lb in all_labels if any(f"({p})" in lb for p in groups)]
+    # 분리 시리즈(예: 리더스원 29평)는 소속 그룹(24평형)이 선택되면 함께 기본 선택
+    sep = separate_series_pyeong_map()
+    selected = [
+        lb
+        for lb in all_labels
+        if any(f"({p})" in lb for p in groups)
+        or any(
+            lb == f"{apt} ({p})" and g in groups
+            for apt, m in sep.items()
+            for p, g in m.items()
+        )
+    ]
     return selected or all_labels
 
 

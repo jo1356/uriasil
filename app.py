@@ -44,7 +44,7 @@ from usd_asset_tab import render_usd_asset_tab
 _PROJECT_DIR = Path(__file__).resolve().parent
 _DATA_CACHE_VERSION = "v53_separate_series_pyeong"
 _DB_CACHE_TTL = 3600
-_UX_SELECTION_VERSION = "default_24pyeong_v1"
+_UX_SELECTION_VERSION = "default_24pyeong_v2_sep29"
 _DEFAULT_PYEONG_GROUPS = ["24평형"]
 
 _OUTLIER_P90_QUANTILE = 0.90
