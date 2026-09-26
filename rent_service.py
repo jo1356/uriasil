@@ -524,6 +524,8 @@ def update_rent_cache(
     )
 
     if crawl_version_changed() and not force_rebuild:
+        if progress:
+            progress(0.0, "수집 규칙 변경 반영 — 기존 전월세 데이터 재처리 중... (수 분 걸릴 수 있음)")
         try:
             reprocess_rent_cache(import_supplemental=False)
             _write_crawl_version_stamp()
@@ -591,6 +593,9 @@ def update_rent_cache(
             return
         try:
             before = len(cached)
+            if new_frames:
+                # 신규분만 평형 규칙 적용 — 마지막 재처리에서 추가 변경이 없도록 (전체 저장 생략)
+                new_frames = [enforce_strict_pyeong_on_rent_dataframe(pd.concat(new_frames, ignore_index=True))]
             cached = merge_rent_crawl_into_cache(cached, new_frames)
             new_frames = []
             touched, pending_slots = pending_slots, set()
@@ -672,6 +677,8 @@ def update_rent_cache(
             prev_flush_year = year
 
     _flush_rent_frames(reason="최종 병합")
+    if progress:
+        progress(1.0, "전월세 데이터 최종 정리 중...")
 
     from data_service import reprocess_rent_cache
 

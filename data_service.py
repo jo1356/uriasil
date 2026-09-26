@@ -1403,8 +1403,20 @@ def reprocess_sale_cache() -> pd.DataFrame:
             ],
             keep="last",
         )
-        save_cached_data(out)
+        if not frame_rows_unchanged(cached, out):
+            save_cached_data(out)
     return out
+
+
+def frame_rows_unchanged(before: pd.DataFrame, after: pd.DataFrame) -> bool:
+    """재처리 결과가 기존과 같으면(행 수·평형그룹 분포 동일) 전체 저장 생략 — 불필요한 테이블 잠금 방지."""
+    if len(before) != len(after):
+        return False
+    if "평형그룹" not in before.columns or "평형그룹" not in after.columns:
+        return False
+    counts_before = before["평형그룹"].astype(str).value_counts().sort_index()
+    counts_after = after["평형그룹"].astype(str).value_counts().sort_index()
+    return counts_before.equals(counts_after)
 
 
 def import_supplemental_rent_csv(csv_path: Path | None = None) -> int:
@@ -1548,12 +1560,13 @@ def reprocess_rent_cache(*, import_supplemental: bool = False) -> pd.DataFrame:
         save_cached_rent_data,
     )
 
-    cached = load_cached_rent_data()
-    if not cached.empty:
-        cached = enforce_strict_pyeong_on_rent_dataframe(cached)
+    loaded = load_cached_rent_data()
+    if not loaded.empty:
+        cached = enforce_strict_pyeong_on_rent_dataframe(loaded)
         cached = purge_rent_sale_cross_contamination(cached)
         cached = dedupe_rent_cache_rows(cached)
-        save_cached_rent_data(cached)
+        if not frame_rows_unchanged(loaded, cached):
+            save_cached_rent_data(cached)
     if import_supplemental:
         import_supplemental_rent_csv()
     return load_cached_rent_data()
@@ -1942,6 +1955,8 @@ def update_cache(
     as_of = datetime.now()
 
     if crawl_version_changed() and not force_rebuild:
+        if progress:
+            progress(0.0, "수집 규칙 변경 반영 — 기존 매매 데이터 재처리 중... (수 분 걸릴 수 있음)")
         try:
             reprocess_sale_cache()
             _write_crawl_version_stamp()
@@ -2090,6 +2105,8 @@ def update_cache(
             _flush_sale_frames(reason=f"{idx}/{total_tasks} 슬롯")
 
     _flush_sale_frames(final=True, reason="최종 병합")
+    if progress:
+        progress(1.0, "매매 데이터 최종 정리 중...")
 
     # 매매 캐시만 재처리 (평형 규칙 재적용·중복 제거 후 1회 전체 저장) — 전월세 캐시는 rent_service.update_rent_cache에서만 갱신
     reprocess_sale_cache()
